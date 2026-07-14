@@ -1,0 +1,7 @@
+.settingsGrid.settingsSingle{grid-template-columns:minmax(460px,760px)}
+.sentenceLanguage{display:flex;gap:28px;margin-bottom:14px!important}.sentenceLanguage label{display:flex;align-items:center;gap:12px;font-size:13px;font-weight:700}.sentenceLanguage select{width:210px}
+.languageBadges{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}.sentence .languageBadge{display:inline-flex;margin:0;padding:3px 8px;border-radius:20px;background:#e8f1f5;color:#356274;font-size:11px}.sentence .languageBadge.ready{background:#dcf4ef;color:#14745b}.sentence .languageBadge.failed{background:#fde5e5;color:#a42f2f}.sentence .languageBadge.generating,.sentence .languageBadge.queued{background:#def2fc;color:#076a9c}
+.sentence small{display:block;margin-top:4px;color:#087fbd;font-size:11px}
+.practiceLanguage{width:auto;min-width:140px;margin-left:12px;padding:7px 30px 7px 11px;border:1px solid #ffffff55;background:#ffffff18;color:#fff}.practiceLanguage option{color:#152522;background:#fff}
+.practiceEmpty{padding:50px clamp(34px,6vw,76px)}.practiceEmpty>label{display:flex;align-items:center;gap:12px;font-weight:700}.practiceEmpty select{width:220px}.practiceEmpty .heroEmpty{margin-top:25px}
+@media(max-width:800px){.settingsGrid.settingsSingle{grid-template-columns:1fr}.sentenceLanguage{gap:14px;flex-wrap:wrap}.sentenceLanguage label{align-items:flex-start;flex-direction:column}.practiceLanguage{min-width:105px;margin-left:0}.lessonTop>div:first-child{gap:8px}}

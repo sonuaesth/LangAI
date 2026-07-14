@@ -32,6 +32,7 @@ pub fn run() {
             commands::save_api_key,
             commands::delete_api_key,
             commands::prepare_sentences,
+            commands::exercise_languages,
             commands::next_exercise
         ])
         .run(tauri::generate_context!())

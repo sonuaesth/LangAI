@@ -1,8 +1,47 @@
 "use client";
-import { useEffect,useState } from "react"; import { api } from "@/lib/tauri"; import type { Sentence } from "@/lib/types";
-const labels={unprepared:"Не готово",queued:"В очереди",generating:"Генерация",ready:"Готово",failed:"Ошибка"};
-export function SentencesView(){const [rows,setRows]=useState<Sentence[]>([]),[text,setText]=useState(""),[selected,setSelected]=useState<Set<number>>(new Set()),[error,setError]=useState("");
-const load=()=>api.listSentences().then(setRows).catch(e=>setError(String(e))); useEffect(()=>{load();let off:undefined|(()=>void);api.onProgress(p=>setRows(r=>r.map(x=>x.id===p.sentenceId?{...x,status:p.status,error:p.error}:x))).then(x=>off=x);return()=>off?.()},[]);
-async function add(){const texts=text.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);if(!texts.length)return;try{await api.addSentences(texts);setText("");load()}catch(e){setError(String(e))}}
-async function prep(ids?:number[]){try{await api.prepare(ids);load()}catch(e){setError(String(e))}}
-return <><header><div><p className="eyebrow">Библиотека</p><h1>Предложения</h1><p>Добавляйте по одному или списком — каждое с новой строки.</p></div></header><div className="card composer"><textarea value={text} onChange={e=>setText(e.target.value)} placeholder={'Я рано заснул в Италии.\nЗавтра мы идём в музей.'}/><button className="primary" onClick={add}>Добавить</button></div>{error&&<div className="error">{error}</div>}<div className="toolbar"><label><input type="checkbox" checked={rows.length>0&&selected.size===rows.length} onChange={e=>setSelected(e.target.checked?new Set(rows.map(x=>x.id)):new Set())}/> Выбрать все</label><span/><button onClick={()=>prep([...selected])} disabled={!selected.size}>Подготовить выбранные</button><button onClick={()=>prep()}>Подготовить все новые</button><button className="danger" disabled={!selected.size} onClick={async()=>{await api.deleteSentences([...selected]);setSelected(new Set());load()}}>Удалить</button></div><div className="list">{rows.length?rows.map(s=><article className="sentence" key={s.id}><input type="checkbox" checked={selected.has(s.id)} onChange={()=>setSelected(v=>{const n=new Set(v);n.has(s.id)?n.delete(s.id):n.add(s.id);return n})}/><div><strong>{s.sourceText}</strong>{s.error&&<small className="errorText">{s.error}</small>}</div><span className={'badge '+s.status}>{labels[s.status]}</span><button onClick={()=>prep([s.id])}>{s.status==='ready'?'Создать заново':'Подготовить'}</button></article>):<div className="empty">Пока пусто. Добавьте первые предложения выше.</div>}</div></>}
+
+import { useEffect, useState } from "react";
+import { api } from "@/lib/tauri";
+import { LANGUAGES } from "@/lib/languages";
+import type { Sentence } from "@/lib/types";
+
+const labels = { unprepared: "Не готово", queued: "В очереди", generating: "Генерация", ready: "Готово", failed: "Ошибка" };
+
+export function SentencesView() {
+  const [rows, setRows] = useState<Sentence[]>([]);
+  const [text, setText] = useState("");
+  const [targetLanguage, setTargetLanguage] = useState<string>(LANGUAGES[0]);
+  const [filterLanguage, setFilterLanguage] = useState<string>("");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [error, setError] = useState("");
+
+  const load = () => api.listSentences(filterLanguage || undefined, targetLanguage).then(setRows).catch(reason => setError(String(reason)));
+
+  useEffect(() => { setSelected(new Set()); void load(); }, [filterLanguage, targetLanguage]);
+  useEffect(() => {
+    let off: undefined | (() => void);
+    api.onProgress(progress => setRows(current => current.map(row => row.id === progress.sentenceId ? { ...row, status: progress.status, error: progress.error } : row))).then(value => off = value);
+    return () => off?.();
+  }, []);
+
+  async function add() {
+    const texts = text.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+    if (!texts.length) return;
+    try { await api.addSentences(texts, targetLanguage); setText(""); await load(); }
+    catch (reason) { setError(String(reason)); }
+  }
+
+  async function prepare(ids?: number[]) {
+    try { await api.prepare(ids, targetLanguage); await load(); }
+    catch (reason) { setError(String(reason)); }
+  }
+
+  return <>
+    <header><div><p className="eyebrow">Библиотека</p><h1>Предложения</h1><p>Предложения каждого языка хранятся и практикуются отдельно.</p></div></header>
+    <div className="sentenceLanguage"><label><span>Перевести на</span><select value={targetLanguage} onChange={event => setTargetLanguage(event.target.value)}>{LANGUAGES.map(item => <option value={item} key={item}>{item}</option>)}</select></label><label><span>Фильтр</span><select value={filterLanguage} onChange={event => setFilterLanguage(event.target.value)}><option value="">Все языки</option>{LANGUAGES.map(item => <option value={item} key={item}>{item}</option>)}</select></label></div>
+    <div className="card composer"><textarea value={text} onChange={event => setText(event.target.value)} placeholder={"Я рано заснул в Италии.\nЗавтра мы идём в музей."}/><button className="primary" onClick={add}>Добавить</button></div>
+    {error && <div className="error">{error}</div>}
+    <div className="toolbar"><label><input type="checkbox" checked={rows.length > 0 && selected.size === rows.length} onChange={event => setSelected(event.target.checked ? new Set(rows.map(row => row.id)) : new Set())}/> Выбрать все</label><span/><button onClick={() => prepare([...selected])} disabled={!selected.size}>Подготовить выбранные</button><button onClick={() => prepare()}>Подготовить все новые</button><button className="danger" disabled={!selected.size} onClick={async () => { await api.deleteSentences([...selected]); setSelected(new Set()); await load(); }}>Удалить</button></div>
+    <div className="list">{rows.length ? rows.map(sentence => <article className="sentence" key={sentence.id}><input type="checkbox" checked={selected.has(sentence.id)} onChange={() => setSelected(current => { const next = new Set(current); next.has(sentence.id) ? next.delete(sentence.id) : next.add(sentence.id); return next; })}/><div><strong>{sentence.sourceText}</strong><div className="languageBadges">{sentence.languages.map(item => <span className={`languageBadge ${item.status}`} key={item.targetLanguage}>{item.targetLanguage}</span>)}</div>{sentence.error && <small className="errorText">{sentence.error}</small>}</div><span className={`badge ${sentence.status}`}>{labels[sentence.status]}</span><button onClick={() => prepare([sentence.id])}>{sentence.languages.some(item => item.targetLanguage === targetLanguage && item.status === "ready") ? "Создать заново" : `Подготовить: ${targetLanguage}`}</button></article>) : <div className="empty">По выбранному фильтру предложений пока нет.</div>}</div>
+  </>;
+}

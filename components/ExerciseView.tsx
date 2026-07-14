@@ -47,12 +47,15 @@ function shuffled(options: Option[]) {
 export function ExerciseView() {
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [order, setOrder] = useState<Record<number, Option[]>>({});
+  const [languages, setLanguages] = useState<string[]>([]);
+  const [language, setLanguage] = useState("");
   const [state, dispatch] = useReducer(reducer, initial);
   const [error, setError] = useState("");
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (selectedLanguage = language, lastId = exercise?.sentenceId) => {
     try {
-      const next = await api.nextExercise(exercise?.sentenceId);
+      if (!selectedLanguage) return;
+      const next = await api.nextExercise(lastId, selectedLanguage);
       setExercise(next);
       dispatch({ type: "reset" });
       if (next) {
@@ -61,13 +64,20 @@ export function ExerciseView() {
     } catch (reason) {
       setError(String(reason));
     }
-  }, [exercise?.sentenceId]);
+  }, [exercise?.sentenceId, language]);
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    api.exerciseLanguages().then(available => {
+      setLanguages(available);
+      const first = available[0] ?? "";
+      setLanguage(first);
+      if (first) void load(first, undefined);
+    }).catch(reason => setError(String(reason)));
+  }, []);
 
   if (error) return <div className="error">{error}</div>;
   if (!exercise) {
-    return <div className="empty heroEmpty">Нет подготовленных предложений. Подготовьте их в разделе «Предложения».</div>;
+    return <div className="practiceEmpty"><label><span>Язык практики</span><select value={language} disabled={!languages.length} onChange={event => { const value = event.target.value; setLanguage(value); void load(value, undefined); }}>{languages.map(item => <option value={item} key={item}>{item}</option>)}</select></label><div className="empty heroEmpty">{languages.length ? `Для языка ${language} нет доступных предложений.` : "Нет подготовленных предложений. Подготовьте их в разделе «Предложения»."}</div></div>;
   }
 
   const lesson = exercise;
@@ -98,7 +108,7 @@ export function ExerciseView() {
 
   return <div className="lesson">
     <div className="lessonTop">
-      <div><span className="lessonKicker">Упражнение</span><strong>Соберите перевод</strong></div>
+      <div><span className="lessonKicker">Упражнение</span><strong>Соберите перевод</strong><select className="practiceLanguage" value={language} onChange={event => { const value = event.target.value; setLanguage(value); void load(value, undefined); }}>{languages.map(item => <option value={item} key={item}>{item}</option>)}</select></div>
       <div className="lessonProgress">{solved} / {exercise.blocks.length}</div>
     </div>
 
@@ -131,7 +141,7 @@ export function ExerciseView() {
     {complete && <div className="lessonComplete">
       <span>Перевод собран</span>
       <h2>{exercise.translation}</h2>
-      <button className="lessonNext" onClick={() => void load()}>Следующее предложение</button>
+      <button className="lessonNext" onClick={() => void load(language, exercise.sentenceId)}>Следующее предложение</button>
     </div>}
 
     <div className="lessonActions">
