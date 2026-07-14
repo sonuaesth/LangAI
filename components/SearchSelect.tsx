@@ -1,0 +1,3 @@
+"use client";
+import { useMemo, useState } from "react";
+export function SearchSelect({label,value,options,onChange}:{label:string;value:string;options:string[];onChange:(v:string)=>void}){const [q,setQ]=useState("");const shown=useMemo(()=>options.filter(x=>x.toLowerCase().includes(q.toLowerCase())).slice(0,8),[q,options]);return <label className="field"><span>{label}</span><input value={q||value} onFocus={()=>setQ("")} onChange={e=>setQ(e.target.value)} placeholder="Поиск…"/><div className={q?"dropdown":"hidden"}>{shown.map(x=><button type="button" key={x} onClick={()=>{onChange(x);setQ("")}}>{x}</button>)}</div></label>}
