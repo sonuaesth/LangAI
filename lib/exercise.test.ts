@@ -1,21 +1,39 @@
-import { describe,expect,it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { attemptHasErrors, availableBlockPositions, matchesExpected, wrongAnswerPositions } from "./exercise";
 
-function assign(channels:Record<number,"blue"|"green">, solved:number){
-  return {...channels,[solved+1]:(solved+1)%2===0?"blue":"green" as const};
-}
+describe("first empty translation slot", () => {
+  it("accepts the expected option regardless of which visible group supplied it", () => {
+    expect(matchesExpected("früh", "früh")).toBe(true);
+  });
 
-describe("exercise channels",()=>{
-  it("does not recolor an already active neighbor",()=>{
-    const before={0:"blue",1:"green"} as const;
-    const after=assign(before,1);
-    expect(after[1]).toBe("green");
-    expect(after[2]).toBe("blue");
+  it("rejects an option for a later slot until the first slot is filled", () => {
+    expect(matchesExpected("eingeschlafen", "früh")).toBe(false);
+  });
+
+  it("ignores surrounding whitespace returned by a model", () => {
+    expect(matchesExpected("  My name ", "My name")).toBe(true);
   });
 });
 
-describe("option order",()=>{
-  it("stays stable when the same stored array is reused",()=>{
-    const order=[5,2,4,1,3];
-    expect(order).toEqual(order);
+describe("deferred attempt validation", () => {
+  it("identifies an error that causes the entire attempt to reset", () => {
+    const answers = { 0: "Ich", 1: "habe", 2: "ein", 3: "Hund" };
+    expect(wrongAnswerPositions(answers, ["Ich", "habe", "einen", "Hund"])).toEqual([2]);
+  });
+});
+
+describe("single-use option groups", () => {
+  it("does not display a group again after an option was selected from it", () => {
+    expect(availableBlockPositions(4, [1])).toEqual([0, 2]);
+  });
+});
+
+describe("completed attempt", () => {
+  it("does not schedule a reset for a completely correct translation", () => {
+    expect(attemptHasErrors({ 0: "Ich", 1: "bin", 2: "hier" }, ["Ich", "bin", "hier"])).toBe(false);
+  });
+
+  it("does schedule a reset when any position is incorrect", () => {
+    expect(attemptHasErrors({ 0: "Ich", 1: "war", 2: "hier" }, ["Ich", "bin", "hier"])).toBe(true);
   });
 });

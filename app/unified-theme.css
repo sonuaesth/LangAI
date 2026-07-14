@@ -1,0 +1,27 @@
+/* Shared desktop visual language: deep navigation, blue page headers, white canvas. */
+aside{background:#07577f;color:#fff;box-shadow:8px 0 28px #06354f2b}
+.brand>span{color:#07577f}.brand small{color:#c6e5f3}
+nav button{color:#d8edf7}nav button:hover{background:#ffffff12}nav button.active{background:#ffffff24;color:#fff}
+.offline{color:#c7e5f1}
+
+.content:not(:has(.lesson)){padding:0 0 48px;max-width:none;min-height:100vh;background:#fff}
+.content:not(:has(.lesson))>header{min-height:176px;margin:0 0 30px;padding:34px clamp(34px,6vw,76px);display:flex;align-items:center;background:#087fbd;color:#fff}
+.content:not(:has(.lesson))>header h1{font-family:Inter,Segoe UI,sans-serif;font-size:38px;font-weight:600;margin:5px 0 8px;color:#fff}
+.content:not(:has(.lesson))>header p{color:#d9f0fb;margin-bottom:0}
+.content:not(:has(.lesson))>header .eyebrow{color:#bce3f6}
+.content:not(:has(.lesson))>:not(header){margin-left:clamp(34px,6vw,76px);margin-right:clamp(34px,6vw,76px)}
+
+.card,.sentence{background:#fff;border-color:#d9e1e5;box-shadow:0 8px 26px #1b526b0c}
+.settingsGrid{margin-top:4px}.card h2{font-family:Inter,Segoe UI,sans-serif;font-weight:650}
+.primary{background:#087fbd;border-color:#087fbd}.primary:hover{background:#076fa5}
+.toolbar button:not(.danger){color:#087fbd;border-color:#b9d7e6}.toolbar button:not(.danger):hover{background:#edf8fd}
+.composer textarea:focus,input:focus,select:focus{outline:2px solid #159bd8;outline-offset:1px;border-color:transparent}
+.badge.ready{background:#dcf4ef;color:#14745b}.badge.queued,.badge.generating{background:#def2fc;color:#076a9c}
+.notice{background:#def3fb;color:#08698f}.keyState{color:#168769}
+
+@media(max-width:800px){
+  aside{box-shadow:4px 0 18px #06354f2b}
+  .content:not(:has(.lesson))>header{min-height:140px;padding:25px 24px}
+  .content:not(:has(.lesson))>header h1{font-size:31px}
+  .content:not(:has(.lesson))>:not(header){margin-left:24px;margin-right:24px}
+}

@@ -5,6 +5,29 @@ use unicode_normalization::UnicodeNormalization;
 fn norm(s: &str) -> String {
     s.trim().nfkc().collect::<String>().to_lowercase()
 }
+pub fn split_edge_punctuation(value: &str) -> (String, String, String) {
+    let value = value.trim();
+    let Some(start) = value
+        .char_indices()
+        .find_map(|(index, ch)| ch.is_alphanumeric().then_some(index))
+    else {
+        return (String::new(), value.to_owned(), String::new());
+    };
+    let end = value
+        .char_indices()
+        .rev()
+        .find_map(|(index, ch)| ch.is_alphanumeric().then_some(index + ch.len_utf8()))
+        .unwrap_or(value.len());
+    (
+        value[..start].to_owned(),
+        value[start..end].to_owned(),
+        value[end..].to_owned(),
+    )
+}
+fn lexical_norm(s: &str) -> String {
+    let (_, core, _) = split_edge_punctuation(s);
+    norm(&core)
+}
 fn clean(s: &str) -> bool {
     !s.is_empty() && !s.chars().any(|c| c.is_control())
 }
@@ -26,9 +49,16 @@ pub fn validate(x: &Generated) -> Result<()> {
                 "each block requires one answer and four distractors".into(),
             ));
         }
-        let mut seen = HashSet::from([norm(&b.correct)]);
+        let (_, correct_core, _) = split_edge_punctuation(&b.correct);
+        if !clean(&correct_core) {
+            return Err(AppError::Validation(
+                "block cannot contain only punctuation".into(),
+            ));
+        }
+        let mut seen = HashSet::from([lexical_norm(&b.correct)]);
         for d in &b.distractors {
-            if !clean(d.trim()) || d.len() > 200 || !seen.insert(norm(d)) {
+            let (_, distractor_core, _) = split_edge_punctuation(d);
+            if !clean(&distractor_core) || d.len() > 200 || !seen.insert(lexical_norm(d)) {
                 return Err(AppError::Validation(
                     "options must be non-empty and unique".into(),
                 ));
@@ -100,5 +130,26 @@ mod tests {
             ],
         };
         assert!(validate(&x).is_ok())
+    }
+
+    #[test]
+    fn rejects_option_that_differs_only_by_punctuation() {
+        let x = Generated {
+            source_text: "x".into(),
+            target_language: "English".into(),
+            translation: "killer.".into(),
+            blocks: vec![GeneratedBlock {
+                position: 0,
+                correct: "killer.".into(),
+                distractors: vec![
+                    "killer?".into(),
+                    "hunter.".into(),
+                    "victim.".into(),
+                    "witness.".into(),
+                ],
+                hint: None,
+            }],
+        };
+        assert!(validate(&x).is_err());
     }
 }

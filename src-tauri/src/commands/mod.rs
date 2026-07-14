@@ -101,6 +101,13 @@ pub async fn save_settings(
 pub async fn verify_api_key(api_key: String) -> Result<Vec<String>> {
     openai::models(&api_key).await
 }
+
+#[tauri::command]
+pub async fn list_available_models() -> Result<Vec<String>> {
+    let key =
+        secrets::get()?.ok_or_else(|| AppError::Input("Configure an API key first".into()))?;
+    openai::exercise_models(&key).await
+}
 #[tauri::command]
 pub async fn save_api_key(api_key: String, s: State<'_, AppState>) -> Result<Settings> {
     secrets::set(&api_key)?;
@@ -276,6 +283,8 @@ pub struct Block {
     id: i64,
     position: i64,
     correct: String,
+    prefix: String,
+    suffix: String,
     hint: Option<String>,
     options: Vec<OptionItem>,
 }
@@ -311,21 +320,30 @@ pub async fn next_exercise(
     .await?
     {
         let bid: i64 = b.get(0);
+        let stored_correct: String = b.get(2);
+        let (prefix, correct, suffix) =
+            crate::openai::validate::split_edge_punctuation(&stored_correct);
         let options = sqlx::query("SELECT id,text,is_correct FROM options WHERE block_id=?")
             .bind(bid)
             .fetch_all(&s.db)
             .await?
             .into_iter()
-            .map(|o| OptionItem {
-                id: o.get(0),
-                text: o.get(1),
-                is_correct: o.get::<i64, _>(2) != 0,
+            .map(|o| {
+                let stored: String = o.get(1);
+                let (_, text, _) = crate::openai::validate::split_edge_punctuation(&stored);
+                OptionItem {
+                    id: o.get(0),
+                    text,
+                    is_correct: o.get::<i64, _>(2) != 0,
+                }
             })
             .collect();
         blocks.push(Block {
             id: bid,
             position: b.get(1),
-            correct: b.get(2),
+            correct,
+            prefix,
+            suffix,
             hint: b.get(3),
             options,
         })

@@ -28,6 +28,7 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::verify_api_key,
+            commands::list_available_models,
             commands::save_api_key,
             commands::delete_api_key,
             commands::prepare_sentences,

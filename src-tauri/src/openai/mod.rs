@@ -27,6 +27,41 @@ pub async fn models(key: &str) -> Result<Vec<String>> {
         .filter_map(|x| x["id"].as_str().map(str::to_owned))
         .collect())
 }
+
+pub fn supports_translation_exercises(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    let supported_family = id.starts_with("gpt-5")
+        || id.starts_with("gpt-4.1")
+        || id.starts_with("gpt-4o")
+        || id.starts_with("o3")
+        || id.starts_with("o4");
+    let unsupported_variant = [
+        "audio",
+        "realtime",
+        "transcribe",
+        "tts",
+        "image",
+        "search",
+        "embedding",
+        "moderation",
+        "computer-use",
+        "codex",
+    ]
+    .iter()
+    .any(|marker| id.contains(marker));
+    supported_family && !unsupported_variant
+}
+
+pub async fn exercise_models(key: &str) -> Result<Vec<String>> {
+    let mut result: Vec<String> = models(key)
+        .await?
+        .into_iter()
+        .filter(|id| supports_translation_exercises(id))
+        .collect();
+    result.sort();
+    result.dedup();
+    Ok(result)
+}
 fn schema() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["source_text","target_language","translation","blocks"],"properties":{"source_text":{"type":"string"},"target_language":{"type":"string"},"translation":{"type":"string"},"blocks":{"type":"array","minItems":1,"maxItems":50,"items":{"type":"object","additionalProperties":false,"required":["position","correct","distractors","hint"],"properties":{"position":{"type":"integer","minimum":0},"correct":{"type":"string"},"distractors":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"string"}},"hint":{"type":["string","null"]}}}}}})
 }
@@ -36,7 +71,7 @@ fn retryable(s: StatusCode) -> bool {
 pub async fn generate(key: &str, model: &str, language: &str, source: &str) -> Result<Generated> {
     let client = Client::builder().timeout(Duration::from_secs(60)).build()?;
     for attempt in 0..3 {
-        let body = json!({"model":model,"instructions":"Translate naturally. Split the exact translation into ordered semantic blocks (words, phrases, or attached punctuation). For every block provide exactly four plausible but unambiguously wrong alternatives. Hint must be short and must not reveal the answer. The source language may be any language.","input":format!("Target language: {language}\nSource: {source}"),"text":{"format":{"type":"json_schema","name":"translation_exercise","strict":true,"schema":schema()}}});
+        let body = json!({"model":model,"instructions":"Translate naturally. Split the exact translation into ordered semantic blocks. Never create a standalone punctuation block. Keep required leading or trailing punctuation attached to the correct block. For every block provide exactly four plausible but unambiguously wrong lexical alternatives; alternatives must not differ from the correct answer or from each other only by punctuation. Hint must be short and must not reveal the answer. The source language may be any language.","input":format!("Target language: {language}\nSource: {source}"),"text":{"format":{"type":"json_schema","name":"translation_exercise","strict":true,"schema":schema()}}});
         let sent = client.post(URL).bearer_auth(key).json(&body).send().await;
         match sent {
             Ok(r) if r.status().is_success() => {
@@ -97,5 +132,13 @@ mod tests {
         assert!(retryable(StatusCode::BAD_GATEWAY));
         assert!(!retryable(StatusCode::UNAUTHORIZED));
         assert!(!retryable(StatusCode::BAD_REQUEST))
+    }
+
+    #[test]
+    fn filters_models_without_text_structured_output() {
+        assert!(supports_translation_exercises("gpt-5-mini"));
+        assert!(supports_translation_exercises("gpt-4.1"));
+        assert!(!supports_translation_exercises("gpt-4o-realtime-preview"));
+        assert!(!supports_translation_exercises("text-embedding-3-small"));
     }
 }

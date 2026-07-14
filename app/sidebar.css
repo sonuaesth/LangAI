@@ -1,0 +1,5 @@
+aside{background:#087fbd;color:#fff;box-shadow:8px 0 28px #063f681c}
+.brand{color:#fff}.brand>span{background:#fff;color:#087fbd}.brand small{color:#d2ecf9}
+nav button{color:#e0f2fb}nav button:hover{background:#ffffff14;color:#fff}nav button.active{background:#ffffff26;color:#fff}
+.offline{color:#d2edf9}.offline::first-letter{color:#d2f058}
+@media(max-width:800px){aside{box-shadow:4px 0 20px #063f681c}}

@@ -1,0 +1,5 @@
+.answerLine .answerToken{display:inline-flex;align-items:flex-end;gap:0;min-width:0;height:42px}
+.answerLine .answerToken i{display:inline-flex;align-items:flex-end;font-style:normal;font-size:inherit;height:40px;line-height:38px}
+.answerLine .answerToken .blank{min-width:58px}
+.answerLine .answerToken .filled{min-width:0}
+.answerLine .fixedPunctuation{border:0;color:#101b24;min-width:0;line-height:36px}
