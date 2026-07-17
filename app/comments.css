@@ -1,0 +1,2 @@
+.translationComposer{align-items:stretch}.composerFields{display:grid;grid-template-columns:1.15fr .85fr;gap:14px;flex:1}.composerFields label{display:flex;flex-direction:column;gap:7px;font-size:12px;font-weight:700}.composerFields label small{color:#718088;font-weight:400}.composerFields textarea{height:112px;min-height:112px}.composerFields .commentInput{background:#f8fbfc}.translationComposer>.primary{min-width:112px}
+@media(max-width:900px){.composerFields{grid-template-columns:1fr}.composerFields textarea{height:90px;min-height:90px}}

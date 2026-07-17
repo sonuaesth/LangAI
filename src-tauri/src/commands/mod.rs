@@ -82,10 +82,17 @@ pub async fn list_sentences(
 pub async fn add_sentences(
     texts: Vec<String>,
     target_language: String,
+    translation_comment: Option<String>,
     s: State<'_, AppState>,
 ) -> Result<Vec<Sentence>> {
     if target_language.trim().is_empty() {
         return Err(AppError::Input("Target language is required".into()));
+    }
+    if translation_comment
+        .as_ref()
+        .is_some_and(|value| value.chars().count() > 1000)
+    {
+        return Err(AppError::Input("Translation comment is too long".into()));
     }
     for text in texts
         .into_iter()
@@ -109,11 +116,10 @@ pub async fn add_sentences(
                 .await?
                 .last_insert_rowid()
         };
-        sqlx::query(
-            "INSERT OR IGNORE INTO sentence_languages(sentence_id,target_language)VALUES(?,?)",
-        )
+        sqlx::query("INSERT INTO sentence_languages(sentence_id,target_language,translation_comment)VALUES(?,?,?) ON CONFLICT(sentence_id,target_language) DO UPDATE SET translation_comment=COALESCE(excluded.translation_comment,sentence_languages.translation_comment)")
         .bind(id)
         .bind(&target_language)
+        .bind(&translation_comment)
         .execute(&s.db)
         .await?;
     }
@@ -225,6 +231,7 @@ async fn persist(
 pub async fn prepare_sentences(
     ids: Option<Vec<i64>>,
     target_language: Option<String>,
+    translation_comment: Option<String>,
     app: AppHandle,
     s: State<'_, AppState>,
 ) -> Result<()> {
@@ -232,8 +239,14 @@ pub async fn prepare_sentences(
         secrets::get()?.ok_or_else(|| AppError::Input("Configure an API key first".into()))?;
     let requested_language =
         target_language.ok_or_else(|| AppError::Input("Target language is required".into()))?;
+    if translation_comment
+        .as_ref()
+        .is_some_and(|value| value.chars().count() > 1000)
+    {
+        return Err(AppError::Input("Translation comment is too long".into()));
+    }
     let cfg = settings_inner(&s).await?;
-    let rows = if let Some(ids) = ids {
+    let rows: Vec<(i64, String, String, Option<String>)> = if let Some(ids) = ids {
         let mut out = vec![];
         for id in ids {
             if let Some(r) = sqlx::query("SELECT id,source_text FROM sentences WHERE id=?")
@@ -241,24 +254,28 @@ pub async fn prepare_sentences(
                 .fetch_optional(&s.db)
                 .await?
             {
-                sqlx::query("INSERT OR IGNORE INTO sentence_languages(sentence_id,target_language)VALUES(?,?)").bind(id).bind(&requested_language).execute(&s.db).await?;
+                sqlx::query("INSERT INTO sentence_languages(sentence_id,target_language,translation_comment)VALUES(?,?,?) ON CONFLICT(sentence_id,target_language) DO UPDATE SET translation_comment=COALESCE(excluded.translation_comment,sentence_languages.translation_comment)").bind(id).bind(&requested_language).bind(&translation_comment).execute(&s.db).await?;
+                let stored_comment: (Option<String>,) = sqlx::query_as("SELECT translation_comment FROM sentence_languages WHERE sentence_id=? AND target_language=?").bind(id).bind(&requested_language).fetch_one(&s.db).await?;
                 out.push((
                     r.get::<i64, _>(0),
                     r.get::<String, _>(1),
                     requested_language.clone(),
+                    stored_comment.0,
                 ))
             }
         }
         out
     } else {
-        sqlx::query_as("SELECT s.id,s.source_text,sl.target_language FROM sentences s JOIN sentence_languages sl ON sl.sentence_id=s.id WHERE sl.status IN('unprepared','failed') AND sl.target_language=?")
+        sqlx::query_as("SELECT s.id,s.source_text,sl.target_language,COALESCE(?,sl.translation_comment) FROM sentences s JOIN sentence_languages sl ON sl.sentence_id=s.id WHERE sl.status IN('unprepared','failed') AND sl.target_language=?")
+        .bind(&translation_comment)
         .bind(&requested_language)
         .fetch_all(&s.db)
         .await?
     };
     let total = rows.len();
-    for (id, _, _) in &rows {
-        sqlx::query("UPDATE sentence_languages SET status='queued',error=NULL WHERE sentence_id=? AND target_language=?")
+    for (id, _, _, _) in &rows {
+        sqlx::query("UPDATE sentence_languages SET status='queued',error=NULL,translation_comment=COALESCE(?,translation_comment) WHERE sentence_id=? AND target_language=?")
+            .bind(&translation_comment)
             .bind(id)
             .bind(&requested_language)
             .execute(&s.db)
@@ -266,7 +283,7 @@ pub async fn prepare_sentences(
     }
     let state = Arc::new(s.inner().clone());
     stream::iter(rows.into_iter().enumerate())
-        .for_each_concurrent(2, |(completed, (id, text, lang))| {
+        .for_each_concurrent(2, |(completed, (id, text, lang, comment))| {
             let state = state.clone();
             let app = app.clone();
             let key = key.clone();
@@ -289,7 +306,7 @@ pub async fn prepare_sentences(
                     },
                 )
                 .ok();
-                let result = match openai::generate(&key, &model, &lang, &text).await {
+                let result = match openai::generate(&key, &model, &lang, &text, comment.as_deref()).await {
                     Ok(g) => persist(&state, id, &g, &model, &lang).await,
                     Err(e) => Err(e),
                 };
