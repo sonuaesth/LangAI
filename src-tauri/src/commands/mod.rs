@@ -3,7 +3,7 @@ use crate::{
     openai, secrets, AppState,
 };
 use futures::{stream, StreamExt};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
@@ -16,6 +16,7 @@ pub struct Sentence {
     pub error: Option<String>,
     pub created_at: String,
     pub languages: Vec<SentenceLanguage>,
+    pub topics: Vec<String>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +24,31 @@ pub struct SentenceLanguage {
     pub target_language: String,
     pub status: String,
     pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentenceDetails {
+    pub id: i64,
+    pub source_text: String,
+    pub topics: Vec<String>,
+    pub translations: Vec<ManualTranslation>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualTranslation {
+    pub target_language: String,
+    pub translation: String,
+    pub blocks: Vec<ManualBlock>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualBlock {
+    pub correct: String,
+    pub distractors: Vec<String>,
+    pub hint: Option<String>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,10 +70,11 @@ struct Progress {
 pub async fn list_sentences(
     filter_language: Option<String>,
     target_language: Option<String>,
+    filter_topic: Option<String>,
     s: State<'_, AppState>,
 ) -> Result<Vec<Sentence>> {
-    let rows = sqlx::query("SELECT id,source_text,created_at FROM sentences WHERE (? IS NULL OR EXISTS(SELECT 1 FROM sentence_languages sl WHERE sl.sentence_id=sentences.id AND sl.target_language=?)) ORDER BY id DESC")
-        .bind(&filter_language).bind(&filter_language).fetch_all(&s.db).await?;
+    let rows = sqlx::query("SELECT id,source_text,created_at FROM sentences WHERE (? IS NULL OR EXISTS(SELECT 1 FROM sentence_languages sl WHERE sl.sentence_id=sentences.id AND sl.target_language=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM sentence_topics st JOIN topics t ON t.id=st.topic_id WHERE st.sentence_id=sentences.id AND t.name=? COLLATE NOCASE)) ORDER BY id DESC")
+        .bind(&filter_language).bind(&filter_language).bind(&filter_topic).bind(&filter_topic).fetch_all(&s.db).await?;
     let mut result = Vec::with_capacity(rows.len());
     for row in rows {
         let id: i64 = row.get(0);
@@ -60,6 +87,8 @@ pub async fn list_sentences(
                 error: item.get(2),
             })
             .collect();
+        let topics = sqlx::query("SELECT t.name FROM topics t JOIN sentence_topics st ON st.topic_id=t.id WHERE st.sentence_id=? ORDER BY t.name")
+            .bind(id).fetch_all(&s.db).await?.into_iter().map(|item| item.get(0)).collect();
         let selected = target_language.as_ref().and_then(|language| {
             languages
                 .iter()
@@ -74,15 +103,119 @@ pub async fn list_sentences(
                 .unwrap_or_else(|| "unprepared".into()),
             error: selected.and_then(|item| item.error.clone()),
             languages,
+            topics,
         });
     }
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn sentence_details(id: i64, s: State<'_, AppState>) -> Result<SentenceDetails> {
+    let sentence = sqlx::query("SELECT source_text FROM sentences WHERE id=?")
+        .bind(id)
+        .fetch_optional(&s.db)
+        .await?
+        .ok_or_else(|| AppError::Input("Sentence was not found".into()))?;
+    let topics = sqlx::query("SELECT t.name FROM topics t JOIN sentence_topics st ON st.topic_id=t.id WHERE st.sentence_id=? ORDER BY t.name")
+        .bind(id).fetch_all(&s.db).await?.into_iter().map(|row| row.get(0)).collect();
+    let prepared = sqlx::query("SELECT sl.target_language,p.translation,p.id FROM sentence_languages sl JOIN preparations p ON p.id=sl.active_preparation_id WHERE sl.sentence_id=? ORDER BY sl.target_language")
+        .bind(id).fetch_all(&s.db).await?;
+    let mut translations = Vec::with_capacity(prepared.len());
+    for row in prepared {
+        let preparation_id: i64 = row.get(2);
+        let block_rows = sqlx::query(
+            "SELECT id,correct,hint FROM blocks WHERE preparation_id=? ORDER BY position",
+        )
+        .bind(preparation_id)
+        .fetch_all(&s.db)
+        .await?;
+        let mut blocks = Vec::with_capacity(block_rows.len());
+        for block in block_rows {
+            let block_id: i64 = block.get(0);
+            let distractors = sqlx::query(
+                "SELECT text FROM options WHERE block_id=? AND is_correct=0 ORDER BY id LIMIT 3",
+            )
+            .bind(block_id)
+            .fetch_all(&s.db)
+            .await?
+            .into_iter()
+            .map(|option| option.get(0))
+            .collect();
+            blocks.push(ManualBlock {
+                correct: block.get(1),
+                distractors,
+                hint: block.get(2),
+            });
+        }
+        translations.push(ManualTranslation {
+            target_language: row.get(0),
+            translation: row.get(1),
+            blocks,
+        });
+    }
+    Ok(SentenceDetails {
+        id,
+        source_text: sentence.get(0),
+        topics,
+        translations,
+    })
+}
+
+#[tauri::command]
+pub async fn save_manual_translation(
+    sentence_id: i64,
+    translation: ManualTranslation,
+    s: State<'_, AppState>,
+) -> Result<()> {
+    let source: (String,) = sqlx::query_as("SELECT source_text FROM sentences WHERE id=?")
+        .bind(sentence_id)
+        .fetch_optional(&s.db)
+        .await?
+        .ok_or_else(|| AppError::Input("Sentence was not found".into()))?;
+    if translation.target_language.trim().is_empty() {
+        return Err(AppError::Input("Target language is required".into()));
+    }
+    let generated = openai::types::Generated {
+        source_text: source.0,
+        target_language: translation.target_language.clone(),
+        translation: translation.translation.trim().to_owned(),
+        blocks: translation
+            .blocks
+            .into_iter()
+            .enumerate()
+            .map(|(position, block)| openai::types::GeneratedBlock {
+                position,
+                correct: block.correct.trim().to_owned(),
+                distractors: block
+                    .distractors
+                    .into_iter()
+                    .map(|value| value.trim().to_owned())
+                    .collect(),
+                hint: block
+                    .hint
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty()),
+            })
+            .collect(),
+    };
+    openai::validate::validate(&generated)?;
+    sqlx::query("INSERT INTO sentence_languages(sentence_id,target_language,status) VALUES(?,?,'unprepared') ON CONFLICT(sentence_id,target_language) DO NOTHING")
+        .bind(sentence_id).bind(&generated.target_language).execute(&s.db).await?;
+    persist(
+        &s,
+        sentence_id,
+        &generated,
+        "manual",
+        &generated.target_language,
+    )
+    .await
 }
 #[tauri::command]
 pub async fn add_sentences(
     texts: Vec<String>,
     target_language: String,
     translation_comment: Option<String>,
+    topic: Option<String>,
     s: State<'_, AppState>,
 ) -> Result<Vec<Sentence>> {
     if target_language.trim().is_empty() {
@@ -94,6 +227,7 @@ pub async fn add_sentences(
     {
         return Err(AppError::Input("Translation comment is too long".into()));
     }
+    validate_topic(&topic)?;
     for text in texts
         .into_iter()
         .map(|x| x.trim().to_owned())
@@ -122,8 +256,33 @@ pub async fn add_sentences(
         .bind(&translation_comment)
         .execute(&s.db)
         .await?;
+        assign_topic(&s.db, id, topic.as_deref()).await?;
     }
-    list_sentences(None, Some(target_language), s).await
+    list_sentences(None, Some(target_language), None, s).await
+}
+
+fn validate_topic(topic: &Option<String>) -> Result<()> {
+    if topic.as_ref().is_some_and(|value| {
+        let length = value.trim().chars().count();
+        length == 0 || length > 100
+    }) {
+        return Err(AppError::Input(
+            "Topic must contain 1 to 100 characters".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn assign_topic(db: &sqlx::SqlitePool, sentence_id: i64, topic: Option<&str>) -> Result<()> {
+    let Some(topic) = topic.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+    sqlx::query("INSERT INTO topics(name) VALUES(?) ON CONFLICT(name) DO NOTHING")
+        .bind(topic)
+        .execute(db)
+        .await?;
+    sqlx::query("INSERT OR IGNORE INTO sentence_topics(sentence_id,topic_id) SELECT ?,id FROM topics WHERE name=? COLLATE NOCASE").bind(sentence_id).bind(topic).execute(db).await?;
+    Ok(())
 }
 #[tauri::command]
 pub async fn delete_sentences(ids: Vec<i64>, s: State<'_, AppState>) -> Result<()> {
@@ -232,6 +391,7 @@ pub async fn prepare_sentences(
     ids: Option<Vec<i64>>,
     target_language: Option<String>,
     translation_comment: Option<String>,
+    topic: Option<String>,
     app: AppHandle,
     s: State<'_, AppState>,
 ) -> Result<()> {
@@ -245,7 +405,9 @@ pub async fn prepare_sentences(
     {
         return Err(AppError::Input("Translation comment is too long".into()));
     }
+    validate_topic(&topic)?;
     let cfg = settings_inner(&s).await?;
+    let has_selected_ids = ids.is_some();
     let rows: Vec<(i64, String, String, Option<String>)> = if let Some(ids) = ids {
         let mut out = vec![];
         for id in ids {
@@ -254,6 +416,7 @@ pub async fn prepare_sentences(
                 .fetch_optional(&s.db)
                 .await?
             {
+                assign_topic(&s.db, id, topic.as_deref()).await?;
                 sqlx::query("INSERT INTO sentence_languages(sentence_id,target_language,translation_comment)VALUES(?,?,?) ON CONFLICT(sentence_id,target_language) DO UPDATE SET translation_comment=COALESCE(excluded.translation_comment,sentence_languages.translation_comment)").bind(id).bind(&requested_language).bind(&translation_comment).execute(&s.db).await?;
                 let stored_comment: (Option<String>,) = sqlx::query_as("SELECT translation_comment FROM sentence_languages WHERE sentence_id=? AND target_language=?").bind(id).bind(&requested_language).fetch_one(&s.db).await?;
                 out.push((
@@ -272,6 +435,11 @@ pub async fn prepare_sentences(
         .fetch_all(&s.db)
         .await?
     };
+    if !has_selected_ids {
+        for (id, _, _, _) in &rows {
+            assign_topic(&s.db, *id, topic.as_deref()).await?;
+        }
+    }
     let total = rows.len();
     for (id, _, _, _) in &rows {
         sqlx::query("UPDATE sentence_languages SET status='queued',error=NULL,translation_comment=COALESCE(?,translation_comment) WHERE sentence_id=? AND target_language=?")
@@ -383,17 +551,38 @@ pub async fn exercise_languages(s: State<'_, AppState>) -> Result<Vec<String>> {
         .fetch_all(&s.db).await?;
     Ok(rows.into_iter().map(|row| row.get(0)).collect())
 }
+
+#[tauri::command]
+pub async fn list_topics(s: State<'_, AppState>) -> Result<Vec<String>> {
+    let rows = sqlx::query("SELECT name FROM topics ORDER BY name")
+        .fetch_all(&s.db)
+        .await?;
+    Ok(rows.into_iter().map(|row| row.get(0)).collect())
+}
+
+#[tauri::command]
+pub async fn exercise_topics(
+    target_language: String,
+    s: State<'_, AppState>,
+) -> Result<Vec<String>> {
+    let rows = sqlx::query("SELECT DISTINCT t.name FROM topics t JOIN sentence_topics st ON st.topic_id=t.id JOIN sentence_languages sl ON sl.sentence_id=st.sentence_id WHERE sl.target_language=? AND sl.status='ready' AND sl.active_preparation_id IS NOT NULL ORDER BY t.name")
+        .bind(target_language).fetch_all(&s.db).await?;
+    Ok(rows.into_iter().map(|row| row.get(0)).collect())
+}
 #[tauri::command]
 pub async fn next_exercise(
     last_id: Option<i64>,
     target_language: Option<String>,
+    topic: Option<String>,
     s: State<'_, AppState>,
 ) -> Result<Option<Exercise>> {
     let rows = sqlx::query(
-        "SELECT sentence_id FROM sentence_languages WHERE status='ready' AND active_preparation_id IS NOT NULL AND (? IS NULL OR target_language=?)",
+        "SELECT sl.sentence_id FROM sentence_languages sl WHERE sl.status='ready' AND sl.active_preparation_id IS NOT NULL AND (? IS NULL OR sl.target_language=?) AND (? IS NULL OR EXISTS(SELECT 1 FROM sentence_topics st JOIN topics t ON t.id=st.topic_id WHERE st.sentence_id=sl.sentence_id AND t.name=? COLLATE NOCASE))",
     )
     .bind(&target_language)
     .bind(&target_language)
+    .bind(&topic)
+    .bind(&topic)
     .fetch_all(&s.db)
     .await?;
     let ids = crate::exercise::next_cycle(rows.iter().map(|r| r.get(0)).collect(), last_id);

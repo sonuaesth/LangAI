@@ -1,13 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { Exercise, Progress, Sentence, Settings } from "./types";
+import type { Exercise, ManualTranslation, Progress, Sentence, SentenceDetails, Settings } from "./types";
 const call = <T>(command:string,args:Record<string,unknown>={}) => invoke<T>(command,args);
 export const api = {
-  listSentences:(filterLanguage?:string,targetLanguage?:string)=>call<Sentence[]>("list_sentences",{filterLanguage:filterLanguage??null,targetLanguage:targetLanguage??null}), addSentences:(texts:string[],targetLanguage:string,translationComment?:string)=>call<Sentence[]>("add_sentences",{texts,targetLanguage,translationComment:translationComment?.trim()||null}),
-  deleteSentences:(ids:number[])=>call<void>("delete_sentences",{ids}), prepare:(ids?:number[],targetLanguage?:string,translationComment?:string)=>call<void>("prepare_sentences",{ids:ids??null,targetLanguage:targetLanguage??null,translationComment:translationComment?.trim()||null}),
+  listSentences:(filterLanguage?:string,targetLanguage?:string,filterTopic?:string)=>call<Sentence[]>("list_sentences",{filterLanguage:filterLanguage??null,targetLanguage:targetLanguage??null,filterTopic:filterTopic??null}), addSentences:(texts:string[],targetLanguage:string,translationComment?:string,topic?:string)=>call<Sentence[]>("add_sentences",{texts,targetLanguage,translationComment:translationComment?.trim()||null,topic:topic?.trim()||null}),
+  sentenceDetails:(id:number)=>call<SentenceDetails>("sentence_details",{id}), saveManualTranslation:(sentenceId:number,translation:ManualTranslation)=>call<void>("save_manual_translation",{sentenceId,translation}),
+  deleteSentences:(ids:number[])=>call<void>("delete_sentences",{ids}), prepare:(ids?:number[],targetLanguage?:string,translationComment?:string,topic?:string)=>call<void>("prepare_sentences",{ids:ids??null,targetLanguage:targetLanguage??null,translationComment:translationComment?.trim()||null,topic:topic?.trim()||null}),
   settings:()=>call<Settings>("get_settings"), saveSettings:(model:string)=>call<Settings>("save_settings",{model}),
   listModels:()=>call<string[]>("list_available_models"),
   saveKey:(apiKey:string)=>call<Settings>("save_api_key",{apiKey}), deleteKey:()=>call<Settings>("delete_api_key"), verifyKey:(apiKey:string)=>call<string[]>("verify_api_key",{apiKey}),
-  exerciseLanguages:()=>call<string[]>("exercise_languages"), nextExercise:(lastId?:number,targetLanguage?:string)=>call<Exercise|null>("next_exercise",{lastId:lastId??null,targetLanguage:targetLanguage??null}),
+  topics:()=>call<string[]>("list_topics"), exerciseLanguages:()=>call<string[]>("exercise_languages"), exerciseTopics:(targetLanguage:string)=>call<string[]>("exercise_topics",{targetLanguage}), nextExercise:(lastId?:number,targetLanguage?:string,topic?:string)=>call<Exercise|null>("next_exercise",{lastId:lastId??null,targetLanguage:targetLanguage??null,topic:topic??null}),
   onProgress:(handler:(p:Progress)=>void):Promise<UnlistenFn>=>listen<Progress>("preparation-progress",e=>handler(e.payload))
 };

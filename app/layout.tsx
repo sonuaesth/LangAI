@@ -7,5 +7,6 @@ import "./validation.css";
 import "./punctuation.css";
 import "./language.css";
 import "./comments.css";
+import "./sentence-editor.css";
 export const metadata: Metadata = { title: "LangAI", description: "Тренажёр переводов" };
 export default function Layout({children}:{children:React.ReactNode}) { return <html lang="ru"><body>{children}</body></html>; }

@@ -49,13 +49,15 @@ export function ExerciseView() {
   const [order, setOrder] = useState<Record<number, Option[]>>({});
   const [languages, setLanguages] = useState<string[]>([]);
   const [language, setLanguage] = useState("");
+  const [topics, setTopics] = useState<string[]>([]);
+  const [topic, setTopic] = useState("");
   const [state, dispatch] = useReducer(reducer, initial);
   const [error, setError] = useState("");
 
-  const load = useCallback(async (selectedLanguage = language, lastId = exercise?.sentenceId) => {
+  const load = useCallback(async (selectedLanguage = language, lastId = exercise?.sentenceId, selectedTopic = topic) => {
     try {
       if (!selectedLanguage) return;
-      const next = await api.nextExercise(lastId, selectedLanguage);
+      const next = await api.nextExercise(lastId, selectedLanguage, selectedTopic || undefined);
       setExercise(next);
       dispatch({ type: "reset" });
       if (next) {
@@ -64,20 +66,30 @@ export function ExerciseView() {
     } catch (reason) {
       setError(String(reason));
     }
-  }, [exercise?.sentenceId, language]);
+  }, [exercise?.sentenceId, language, topic]);
+
+  async function changeLanguage(value: string) {
+    setLanguage(value);
+    setTopic("");
+    try { setTopics(await api.exerciseTopics(value)); } catch (reason) { setError(String(reason)); }
+    await load(value, undefined, "");
+  }
 
   useEffect(() => {
     api.exerciseLanguages().then(available => {
       setLanguages(available);
       const first = available[0] ?? "";
       setLanguage(first);
-      if (first) void load(first, undefined);
+      if (first) {
+        api.exerciseTopics(first).then(setTopics).catch(reason => setError(String(reason)));
+        void load(first, undefined, "");
+      }
     }).catch(reason => setError(String(reason)));
   }, []);
 
   if (error) return <div className="error">{error}</div>;
   if (!exercise) {
-    return <div className="practiceEmpty"><label><span>Язык практики</span><select value={language} disabled={!languages.length} onChange={event => { const value = event.target.value; setLanguage(value); void load(value, undefined); }}>{languages.map(item => <option value={item} key={item}>{item}</option>)}</select></label><div className="empty heroEmpty">{languages.length ? `Для языка ${language} нет доступных предложений.` : "Нет подготовленных предложений. Подготовьте их в разделе «Предложения»."}</div></div>;
+    return <div className="practiceEmpty"><label><span>Язык практики</span><select value={language} disabled={!languages.length} onChange={event => void changeLanguage(event.target.value)}>{languages.map(item => <option value={item} key={item}>{item}</option>)}</select></label><label><span>Тема</span><select value={topic} onChange={event => { const value = event.target.value; setTopic(value); void load(language, undefined, value); }}><option value="">Все темы</option>{topics.map(item => <option value={item} key={item}>{item}</option>)}</select></label><div className="empty heroEmpty">{languages.length ? `Для выбранных языка и темы нет доступных предложений.` : "Нет подготовленных предложений. Подготовьте их в разделе «Предложения»."}</div></div>;
   }
 
   const lesson = exercise;
@@ -108,7 +120,7 @@ export function ExerciseView() {
 
   return <div className="lesson">
     <div className="lessonTop">
-      <div><span className="lessonKicker">Упражнение</span><strong>Соберите перевод</strong><select className="practiceLanguage" value={language} onChange={event => { const value = event.target.value; setLanguage(value); void load(value, undefined); }}>{languages.map(item => <option value={item} key={item}>{item}</option>)}</select></div>
+      <div><span className="lessonKicker">Упражнение</span><strong>Соберите перевод</strong><select className="practiceLanguage" value={language} onChange={event => void changeLanguage(event.target.value)}>{languages.map(item => <option value={item} key={item}>{item}</option>)}</select><select className="practiceLanguage" value={topic} onChange={event => { const value = event.target.value; setTopic(value); void load(language, undefined, value); }}><option value="">Все темы</option>{topics.map(item => <option value={item} key={item}>{item}</option>)}</select></div>
       <div className="lessonProgress">{solved} / {exercise.blocks.length}</div>
     </div>
 
@@ -141,7 +153,7 @@ export function ExerciseView() {
     {complete && <div className="lessonComplete">
       <span>Перевод собран</span>
       <h2>{exercise.translation}</h2>
-      <button className="lessonNext" onClick={() => void load(language, exercise.sentenceId)}>Следующее предложение</button>
+      <button className="lessonNext" onClick={() => void load(language, exercise.sentenceId, topic)}>Следующее предложение</button>
     </div>}
 
     <div className="lessonActions">

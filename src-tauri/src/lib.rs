@@ -23,6 +23,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_sentences,
+            commands::sentence_details,
+            commands::save_manual_translation,
             commands::add_sentences,
             commands::delete_sentences,
             commands::get_settings,
@@ -32,7 +34,9 @@ pub fn run() {
             commands::save_api_key,
             commands::delete_api_key,
             commands::prepare_sentences,
+            commands::list_topics,
             commands::exercise_languages,
+            commands::exercise_topics,
             commands::next_exercise
         ])
         .run(tauri::generate_context!())
