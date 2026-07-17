@@ -414,7 +414,11 @@ pub async fn next_exercise(
         let stored_correct: String = b.get(2);
         let (prefix, correct, suffix) =
             crate::openai::validate::split_edge_punctuation(&stored_correct);
-        let options = sqlx::query("SELECT id,text,is_correct FROM options WHERE block_id=?")
+        // Older preparations may contain four distractors. Limit the result so
+        // every exercise consistently shows one correct answer and three alternatives.
+        let options = sqlx::query(
+            "SELECT id,text,is_correct FROM options WHERE block_id=? ORDER BY is_correct DESC,id LIMIT 4",
+        )
             .bind(bid)
             .fetch_all(&s.db)
             .await?

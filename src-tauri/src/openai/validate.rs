@@ -44,9 +44,9 @@ pub fn validate(x: &Generated) -> Result<()> {
         if b.position != i {
             return Err(AppError::Validation("positions must be sequential".into()));
         }
-        if !clean(b.correct.trim()) || b.correct.len() > 200 || b.distractors.len() != 4 {
+        if !clean(b.correct.trim()) || b.correct.len() > 200 || b.distractors.len() != 3 {
             return Err(AppError::Validation(
-                "each block requires one answer and four distractors".into(),
+                "each block requires one answer and three distractors".into(),
             ));
         }
         let (_, correct_core, _) = split_edge_punctuation(&b.correct);
@@ -91,7 +91,7 @@ mod tests {
             blocks: vec![GeneratedBlock {
                 position: 0,
                 correct: "Ich".into(),
-                distractors: vec!["ich".into(), "Du".into(), "Er".into(), "Wir".into()],
+                distractors: vec!["ich".into(), "Du".into(), "Er".into()],
                 hint: None,
             }],
         };
@@ -108,23 +108,13 @@ mod tests {
                 GeneratedBlock {
                     position: 0,
                     correct: "My name".into(),
-                    distractors: vec![
-                        "Your name".into(),
-                        "His name".into(),
-                        "Our name".into(),
-                        "Their name".into(),
-                    ],
+                    distractors: vec!["Your name".into(), "His name".into(), "Our name".into()],
                     hint: None,
                 },
                 GeneratedBlock {
                     position: 1,
                     correct: "is Phia".into(),
-                    distractors: vec![
-                        "was Phia".into(),
-                        "is Maria".into(),
-                        "are Phia".into(),
-                        "is Sofia".into(),
-                    ],
+                    distractors: vec!["was Phia".into(), "is Maria".into(), "are Phia".into()],
                     hint: None,
                 },
             ],
@@ -141,12 +131,7 @@ mod tests {
             blocks: vec![GeneratedBlock {
                 position: 0,
                 correct: "killer.".into(),
-                distractors: vec![
-                    "killer?".into(),
-                    "hunter.".into(),
-                    "victim.".into(),
-                    "witness.".into(),
-                ],
+                distractors: vec!["killer?".into(), "hunter.".into(), "victim.".into()],
                 hint: None,
             }],
         };
