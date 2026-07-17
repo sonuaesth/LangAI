@@ -6,7 +6,7 @@ use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sentence {
@@ -41,6 +41,8 @@ pub struct ManualTranslation {
     pub target_language: String,
     pub translation: String,
     pub blocks: Vec<ManualBlock>,
+    pub audio_name: Option<String>,
+    pub audio_mime: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -49,6 +51,12 @@ pub struct ManualBlock {
     pub correct: String,
     pub distractors: Vec<String>,
     pub hint: Option<String>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioData {
+    mime_type: String,
+    bytes: Vec<u8>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -118,7 +126,7 @@ pub async fn sentence_details(id: i64, s: State<'_, AppState>) -> Result<Sentenc
         .ok_or_else(|| AppError::Input("Sentence was not found".into()))?;
     let topics = sqlx::query("SELECT t.name FROM topics t JOIN sentence_topics st ON st.topic_id=t.id WHERE st.sentence_id=? ORDER BY t.name")
         .bind(id).fetch_all(&s.db).await?.into_iter().map(|row| row.get(0)).collect();
-    let prepared = sqlx::query("SELECT sl.target_language,p.translation,p.id FROM sentence_languages sl JOIN preparations p ON p.id=sl.active_preparation_id WHERE sl.sentence_id=? ORDER BY sl.target_language")
+    let prepared = sqlx::query("SELECT sl.target_language,p.translation,p.id,sl.audio_name,sl.audio_mime FROM sentence_languages sl JOIN preparations p ON p.id=sl.active_preparation_id WHERE sl.sentence_id=? ORDER BY sl.target_language")
         .bind(id).fetch_all(&s.db).await?;
     let mut translations = Vec::with_capacity(prepared.len());
     for row in prepared {
@@ -151,6 +159,8 @@ pub async fn sentence_details(id: i64, s: State<'_, AppState>) -> Result<Sentenc
             target_language: row.get(0),
             translation: row.get(1),
             blocks,
+            audio_name: row.get(3),
+            audio_mime: row.get(4),
         });
     }
     Ok(SentenceDetails {
@@ -158,6 +168,119 @@ pub async fn sentence_details(id: i64, s: State<'_, AppState>) -> Result<Sentenc
         source_text: sentence.get(0),
         topics,
         translations,
+    })
+}
+
+fn audio_error(error: std::io::Error) -> AppError {
+    AppError::Input(format!("Audio storage: {error}"))
+}
+
+fn audio_directory(app: &AppHandle) -> Result<std::path::PathBuf> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| AppError::Input(error.to_string()))?
+        .join("audio");
+    std::fs::create_dir_all(&directory).map_err(audio_error)?;
+    Ok(directory)
+}
+
+#[tauri::command]
+pub async fn save_sentence_audio(
+    sentence_id: i64,
+    target_language: String,
+    file_name: String,
+    mime_type: String,
+    bytes: Vec<u8>,
+    app: AppHandle,
+    s: State<'_, AppState>,
+) -> Result<()> {
+    if bytes.is_empty() || bytes.len() > 25 * 1024 * 1024 {
+        return Err(AppError::Input(
+            "Audio file must be between 1 byte and 25 MB".into(),
+        ));
+    }
+    let mime = mime_type.to_ascii_lowercase();
+    let extension = match mime.as_str() {
+        "audio/mpeg" | "audio/mp3" => "mp3",
+        "audio/wav" | "audio/x-wav" => "wav",
+        "audio/ogg" => "ogg",
+        "audio/mp4" | "audio/x-m4a" => "m4a",
+        "audio/webm" => "webm",
+        _ => {
+            return Err(AppError::Input(
+                "Supported audio formats: MP3, WAV, OGG, M4A and WebM".into(),
+            ))
+        }
+    };
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| AppError::Input(error.to_string()))?
+        .as_millis();
+    let stored_name = format!("{sentence_id}-{stamp}.{extension}");
+    let directory = audio_directory(&app)?;
+    std::fs::write(directory.join(&stored_name), bytes).map_err(audio_error)?;
+    let previous: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT audio_file FROM sentence_languages WHERE sentence_id=? AND target_language=?",
+    )
+    .bind(sentence_id)
+    .bind(&target_language)
+    .fetch_optional(&s.db)
+    .await?;
+    sqlx::query("INSERT INTO sentence_languages(sentence_id,target_language,status,audio_file,audio_name,audio_mime) VALUES(?,?,'unprepared',?,?,?) ON CONFLICT(sentence_id,target_language) DO UPDATE SET audio_file=excluded.audio_file,audio_name=excluded.audio_name,audio_mime=excluded.audio_mime")
+        .bind(sentence_id).bind(&target_language).bind(&stored_name).bind(file_name).bind(mime_type).execute(&s.db).await?;
+    if let Some(Some(old_name)) = previous.map(|value| value.0) {
+        if old_name != stored_name {
+            let _ = std::fs::remove_file(directory.join(old_name));
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_sentence_audio(
+    sentence_id: i64,
+    target_language: String,
+    app: AppHandle,
+    s: State<'_, AppState>,
+) -> Result<()> {
+    let previous: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT audio_file FROM sentence_languages WHERE sentence_id=? AND target_language=?",
+    )
+    .bind(sentence_id)
+    .bind(&target_language)
+    .fetch_optional(&s.db)
+    .await?;
+    sqlx::query("UPDATE sentence_languages SET audio_file=NULL,audio_name=NULL,audio_mime=NULL WHERE sentence_id=? AND target_language=?")
+        .bind(sentence_id).bind(target_language).execute(&s.db).await?;
+    if let Some(Some(name)) = previous.map(|value| value.0) {
+        let _ = std::fs::remove_file(audio_directory(&app)?.join(name));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn sentence_audio(
+    sentence_id: i64,
+    target_language: String,
+    app: AppHandle,
+    s: State<'_, AppState>,
+) -> Result<AudioData> {
+    let row = sqlx::query("SELECT audio_file,audio_mime FROM sentence_languages WHERE sentence_id=? AND target_language=? AND audio_file IS NOT NULL")
+        .bind(sentence_id).bind(target_language).fetch_optional(&s.db).await?
+        .ok_or_else(|| AppError::Input("Audio is not attached".into()))?;
+    let name: String = row.get(0);
+    if std::path::Path::new(&name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        != Some(name.as_str())
+    {
+        return Err(AppError::Input("Invalid audio path".into()));
+    }
+    let bytes = std::fs::read(audio_directory(&app)?.join(name)).map_err(audio_error)?;
+    Ok(AudioData {
+        mime_type: row.get(1),
+        bytes,
     })
 }
 
@@ -525,7 +648,9 @@ pub async fn prepare_sentences(
 pub struct Exercise {
     sentence_id: i64,
     source_text: String,
+    target_language: String,
     translation: String,
+    audio_available: bool,
     blocks: Vec<Block>,
 }
 #[derive(Serialize)]
@@ -589,7 +714,7 @@ pub async fn next_exercise(
     let Some(id) = ids.first() else {
         return Ok(None);
     };
-    let r=sqlx::query("SELECT s.source_text,p.translation,p.id FROM sentences s JOIN sentence_languages sl ON sl.sentence_id=s.id JOIN preparations p ON p.id=sl.active_preparation_id WHERE s.id=? AND (? IS NULL OR sl.target_language=?)").bind(id).bind(&target_language).bind(&target_language).fetch_one(&s.db).await?;
+    let r=sqlx::query("SELECT s.source_text,p.translation,p.id,sl.target_language,sl.audio_file IS NOT NULL FROM sentences s JOIN sentence_languages sl ON sl.sentence_id=s.id JOIN preparations p ON p.id=sl.active_preparation_id WHERE s.id=? AND (? IS NULL OR sl.target_language=?)").bind(id).bind(&target_language).bind(&target_language).fetch_one(&s.db).await?;
     let pid: i64 = r.get(2);
     let mut blocks = vec![];
     for b in sqlx::query(
@@ -635,7 +760,9 @@ pub async fn next_exercise(
     Ok(Some(Exercise {
         sentence_id: *id,
         source_text: r.get(0),
+        target_language: r.get(3),
         translation: r.get(1),
+        audio_available: r.get::<i64, _>(4) != 0,
         blocks,
     }))
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useReducer, useState } from "react";
-import { Lightbulb, RotateCcw } from "lucide-react";
+import { Lightbulb, RotateCcw, Volume2 } from "lucide-react";
 import { api } from "@/lib/tauri";
 import type { Exercise, Option } from "@/lib/types";
 import { attemptHasErrors, availableBlockPositions, wrongAnswerPositions } from "@/lib/exercise";
@@ -53,6 +53,7 @@ export function ExerciseView() {
   const [topic, setTopic] = useState("");
   const [state, dispatch] = useReducer(reducer, initial);
   const [error, setError] = useState("");
+  const [audioBusy, setAudioBusy] = useState(false);
 
   const load = useCallback(async (selectedLanguage = language, lastId = exercise?.sentenceId, selectedTopic = topic) => {
     try {
@@ -118,6 +119,20 @@ export function ExerciseView() {
     if (shouldReset) setTimeout(() => dispatch({ type: "clearWrong" }), 650);
   }
 
+  async function playAnswerAudio() {
+    if (!exercise) return;
+    setAudioBusy(true);
+    try {
+      const audio = await api.sentenceAudio(exercise.sentenceId, exercise.targetLanguage);
+      const url = URL.createObjectURL(new Blob([new Uint8Array(audio.bytes)], { type: audio.mimeType }));
+      const player = new Audio(url);
+      player.addEventListener("ended", () => URL.revokeObjectURL(url), { once:true });
+      player.addEventListener("error", () => URL.revokeObjectURL(url), { once:true });
+      await player.play();
+    } catch (reason) { setError(String(reason)); }
+    finally { setAudioBusy(false); }
+  }
+
   return <div className="lesson">
     <div className="lessonTop">
       <div><span className="lessonKicker">Упражнение</span><strong>Соберите перевод</strong><select className="practiceLanguage" value={language} onChange={event => void changeLanguage(event.target.value)}>{languages.map(item => <option value={item} key={item}>{item}</option>)}</select><select className="practiceLanguage" value={topic} onChange={event => { const value = event.target.value; setTopic(value); void load(language, undefined, value); }}><option value="">Все темы</option>{topics.map(item => <option value={item} key={item}>{item}</option>)}</select></div>
@@ -153,6 +168,7 @@ export function ExerciseView() {
     {complete && <div className="lessonComplete">
       <span>Перевод собран</span>
       <h2>{exercise.translation}</h2>
+      {exercise.audioAvailable && <button className="listenAnswer" disabled={audioBusy} onClick={() => void playAnswerAudio()}><Volume2/>{audioBusy ? "Загрузка…" : "Прослушать"}</button>}
       <button className="lessonNext" onClick={() => void load(language, exercise.sentenceId, topic)}>Следующее предложение</button>
     </div>}
 
