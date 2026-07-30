@@ -152,6 +152,21 @@ pub struct PrepareSentenceRequest {
     pub translation_comment: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateAudioRequest {
+    pub target_language: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioMetadataResponse {
+    pub sha256: String,
+    pub size: i64,
+    pub mime: String,
+    pub name: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

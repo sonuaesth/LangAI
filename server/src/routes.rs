@@ -1,9 +1,14 @@
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{
+    extract::{DefaultBodyLimit, State},
+    routing::get,
+    Json, Router,
+};
 use langai_contracts::HealthResponse;
 
-use crate::{auth, domain, error::ApiError, openai, secrets, state::AppState};
+use crate::{audio, auth, domain, error::ApiError, openai, secrets, state::AppState};
 
 pub fn router(state: AppState) -> Router {
+    let max_audio_bytes = state.config.max_audio_bytes;
     Router::new()
         .route("/health", get(health))
         .route("/api/v1/health", get(health))
@@ -42,11 +47,22 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/sentences/{sentence_id}/prepare",
             axum::routing::post(openai::prepare_sentence),
         )
+        .route(
+            "/api/v1/sentences/{sentence_id}/audio",
+            get(audio::download_audio)
+                .put(audio::upload_audio)
+                .delete(audio::delete_audio),
+        )
+        .route(
+            "/api/v1/sentences/{sentence_id}/audio/generate",
+            axum::routing::post(audio::generate_audio),
+        )
         .route("/api/v1/provider-keys", get(secrets::key_statuses))
         .route(
             "/api/v1/provider-keys/{provider}",
             axum::routing::put(secrets::save_key).delete(secrets::delete_key),
         )
+        .layer(DefaultBodyLimit::max(max_audio_bytes))
         .with_state(state)
 }
 

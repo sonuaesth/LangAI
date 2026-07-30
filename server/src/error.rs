@@ -25,6 +25,8 @@ pub enum ApiError {
     InvalidCredentials,
     #[error("{0}")]
     Provider(String),
+    #[error("request body is too large")]
+    PayloadTooLarge,
 }
 
 impl ApiError {
@@ -37,6 +39,7 @@ impl ApiError {
             Self::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
             Self::InvalidCredentials => (StatusCode::UNAUTHORIZED, "invalid_credentials"),
             Self::Provider(_) => (StatusCode::BAD_GATEWAY, "provider_error"),
+            Self::PayloadTooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large"),
             Self::Database(_) | Self::Internal => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
             }

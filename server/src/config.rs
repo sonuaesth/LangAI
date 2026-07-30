@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, str::FromStr};
+use std::{net::SocketAddr, path::PathBuf, str::FromStr};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 
@@ -12,6 +12,8 @@ pub struct Config {
     pub registration_open: bool,
     pub secure_cookies: bool,
     pub secrets_master_key: [u8; 32],
+    pub audio_storage_path: PathBuf,
+    pub max_audio_bytes: usize,
 }
 
 impl Config {
@@ -49,6 +51,16 @@ impl Config {
         let secrets_master_key: [u8; 32] = decoded_master_key
             .try_into()
             .map_err(|_| anyhow::anyhow!("SECRETS_MASTER_KEY must decode to exactly 32 bytes"))?;
+        let audio_storage_path = std::env::var("AUDIO_STORAGE_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("./data/audio"));
+        let max_audio_bytes = std::env::var("MAX_AUDIO_BYTES")
+            .unwrap_or_else(|_| "20971520".into())
+            .parse::<usize>()
+            .map_err(|_| anyhow::anyhow!("MAX_AUDIO_BYTES must be a positive integer"))?;
+        if max_audio_bytes == 0 || max_audio_bytes > 100 * 1024 * 1024 {
+            anyhow::bail!("MAX_AUDIO_BYTES must be between 1 and 104857600");
+        }
         Ok(Self {
             bind: SocketAddr::from_str(&bind)
                 .map_err(|error| anyhow::anyhow!("invalid LANGAI_BIND: {error}"))?,
@@ -59,6 +71,8 @@ impl Config {
             registration_open,
             secure_cookies,
             secrets_master_key,
+            audio_storage_path,
+            max_audio_bytes,
         })
     }
 }
