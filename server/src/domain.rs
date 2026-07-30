@@ -335,12 +335,17 @@ pub(crate) async fn load_sentence(
             Option<String>,
             Option<String>,
             bool,
+            Option<String>,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
             i64,
             Option<Uuid>,
         ),
     >(
         "SELECT target_language,status,error,translation_comment,
-             audio_object_key IS NOT NULL,revision,active_preparation_id
+             audio_object_key IS NOT NULL,audio_sha256,audio_size,audio_mime,audio_name,
+             revision,active_preparation_id
              FROM sentence_languages
              WHERE user_id=$1 AND sentence_id=$2 AND deleted_at IS NULL
              ORDER BY target_language",
@@ -356,6 +361,10 @@ pub(crate) async fn load_sentence(
         error,
         translation_comment,
         audio_available,
+        audio_sha256,
+        audio_size,
+        audio_mime,
+        audio_name,
         revision,
         preparation_id,
     ) in language_rows
@@ -422,6 +431,17 @@ pub(crate) async fn load_sentence(
             error,
             translation_comment,
             audio_available,
+            audio: match (audio_sha256, audio_size, audio_mime) {
+                (Some(sha256), Some(size), Some(mime)) => {
+                    Some(langai_contracts::AudioMetadataResponse {
+                        sha256,
+                        size,
+                        mime,
+                        name: audio_name,
+                    })
+                }
+                _ => None,
+            },
             revision,
             active_preparation,
         });

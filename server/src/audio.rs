@@ -54,15 +54,69 @@ fn sha256(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn valid_mp3(bytes: &[u8]) -> bool {
-    bytes.len() >= 3 && (bytes.starts_with(b"ID3") || (bytes[0] == 0xff && bytes[1] & 0xe0 == 0xe0))
+#[derive(Clone, Copy)]
+struct AudioFormat {
+    mime: &'static str,
+    extension: &'static str,
 }
 
-fn object_key(user_id: Uuid, hash: &str) -> String {
-    format!("{user_id}/{}/{hash}.mp3", &hash[..2])
+fn audio_format(mime: &str, bytes: &[u8]) -> Option<AudioFormat> {
+    let mp3 = bytes.len() >= 3
+        && (bytes.starts_with(b"ID3") || (bytes[0] == 0xff && bytes[1] & 0xe0 == 0xe0));
+    let wav = bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WAVE";
+    let ogg = bytes.starts_with(b"OggS");
+    let mp4 = bytes.len() >= 12 && &bytes[4..8] == b"ftyp";
+    let webm = bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]);
+    match mime {
+        "audio/mpeg" | "audio/mp3" if mp3 => Some(AudioFormat {
+            mime: "audio/mpeg",
+            extension: "mp3",
+        }),
+        "audio/wav" | "audio/x-wav" if wav => Some(AudioFormat {
+            mime: "audio/wav",
+            extension: "wav",
+        }),
+        "audio/ogg" if ogg => Some(AudioFormat {
+            mime: "audio/ogg",
+            extension: "ogg",
+        }),
+        "audio/mp4" | "audio/x-m4a" if mp4 => Some(AudioFormat {
+            mime: "audio/mp4",
+            extension: "m4a",
+        }),
+        "audio/webm" if webm => Some(AudioFormat {
+            mime: "audio/webm",
+            extension: "webm",
+        }),
+        _ => None,
+    }
 }
 
-fn object_path(state: &AppState, user_id: Uuid, hash: &str) -> Result<PathBuf, ApiError> {
+fn stored_format(mime: &str) -> Result<AudioFormat, ApiError> {
+    audio_format(
+        mime,
+        match mime {
+            "audio/mpeg" => b"ID3".as_slice(),
+            "audio/wav" => b"RIFF0000WAVE".as_slice(),
+            "audio/ogg" => b"OggS".as_slice(),
+            "audio/mp4" => b"0000ftyp0000".as_slice(),
+            "audio/webm" => [0x1a, 0x45, 0xdf, 0xa3].as_slice(),
+            _ => return Err(ApiError::Internal),
+        },
+    )
+    .ok_or(ApiError::Internal)
+}
+
+fn object_key(user_id: Uuid, hash: &str, extension: &str) -> String {
+    format!("{user_id}/{}/{hash}.{extension}", &hash[..2])
+}
+
+fn object_path(
+    state: &AppState,
+    user_id: Uuid,
+    hash: &str,
+    extension: &str,
+) -> Result<PathBuf, ApiError> {
     if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(ApiError::Internal);
     }
@@ -71,24 +125,23 @@ fn object_path(state: &AppState, user_id: Uuid, hash: &str) -> Result<PathBuf, A
         .audio_storage_path
         .join(user_id.to_string())
         .join(&hash[..2])
-        .join(format!("{hash}.mp3")))
+        .join(format!("{hash}.{extension}")))
 }
 
 async fn store_bytes(
     state: &AppState,
     user_id: Uuid,
     bytes: &[u8],
-) -> Result<(String, String), ApiError> {
+    requested_mime: &str,
+) -> Result<(String, String, AudioFormat), ApiError> {
     if bytes.is_empty() || bytes.len() > state.config.max_audio_bytes {
         return Err(ApiError::PayloadTooLarge);
     }
-    if !valid_mp3(bytes) {
-        return Err(ApiError::InvalidInput(
-            "Only a valid MP3 audio file is supported".into(),
-        ));
-    }
+    let format = audio_format(requested_mime, bytes).ok_or_else(|| {
+        ApiError::InvalidInput("Audio type does not match a supported file signature".into())
+    })?;
     let hash = sha256(bytes);
-    let path = object_path(state, user_id, &hash)?;
+    let path = object_path(state, user_id, &hash, format.extension)?;
     let parent = path.parent().ok_or(ApiError::Internal)?;
     tokio::fs::create_dir_all(parent)
         .await
@@ -109,7 +162,11 @@ async fn store_bytes(
             }
         }
     }
-    Ok((hash.clone(), object_key(user_id, &hash)))
+    Ok((
+        hash.clone(),
+        object_key(user_id, &hash, format.extension),
+        format,
+    ))
 }
 
 async fn attach_audio(
@@ -119,6 +176,7 @@ async fn attach_audio(
     target_language: &str,
     bytes: &[u8],
     name: Option<String>,
+    requested_mime: &str,
 ) -> Result<AudioMetadataResponse, ApiError> {
     let exists = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(
@@ -132,14 +190,14 @@ async fn attach_audio(
     if !exists {
         return Err(ApiError::NotFound);
     }
-    let (hash, key) = store_bytes(state, user_id, bytes).await?;
+    let (hash, key, format) = store_bytes(state, user_id, bytes, requested_mime).await?;
     let size = bytes.len() as i64;
     let mut tx = state.database.begin().await?;
     sqlx::query(
         "INSERT INTO sentence_languages(
            user_id,sentence_id,target_language,audio_object_key,audio_name,audio_mime,
            audio_sha256,audio_size
-         ) VALUES($1,$2,$3,$4,$5,'audio/mpeg',$6,$7)
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
          ON CONFLICT(user_id,sentence_id,target_language) DO UPDATE SET
            audio_object_key=excluded.audio_object_key,audio_name=excluded.audio_name,
            audio_mime=excluded.audio_mime,audio_sha256=excluded.audio_sha256,
@@ -151,6 +209,7 @@ async fn attach_audio(
     .bind(target_language)
     .bind(key)
     .bind(&name)
+    .bind(format.mime)
     .bind(&hash)
     .bind(size)
     .execute(&mut *tx)
@@ -178,7 +237,7 @@ async fn attach_audio(
     Ok(AudioMetadataResponse {
         sha256: hash,
         size,
-        mime: "audio/mpeg".into(),
+        mime: format.mime.into(),
         name,
     })
 }
@@ -192,15 +251,11 @@ pub async fn upload_audio(
 ) -> Result<(StatusCode, Json<AudioMetadataResponse>), ApiError> {
     let auth = authenticate_request(&state, &headers).await?;
     require_mutation_auth(&state, &headers, &auth)?;
-    if headers
+    let requested_mime = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        != Some("audio/mpeg")
-    {
-        return Err(ApiError::InvalidInput(
-            "Content-Type must be audio/mpeg".into(),
-        ));
-    }
+        .and_then(|value| value.split(';').next())
+        .unwrap_or("");
     if body.len() > state.config.max_audio_bytes {
         return Err(ApiError::PayloadTooLarge);
     }
@@ -226,6 +281,7 @@ pub async fn upload_audio(
         &language(&query.target_language)?,
         &body,
         name,
+        requested_mime,
     )
     .await?;
     Ok((StatusCode::CREATED, Json(metadata)))
@@ -239,8 +295,8 @@ pub async fn download_audio(
 ) -> Result<Response, ApiError> {
     let auth = authenticate_request(&state, &headers).await?;
     let language = language(&query.target_language)?;
-    let (hash, name) = sqlx::query_as::<_, (String, Option<String>)>(
-        "SELECT audio_sha256,audio_name FROM sentence_languages
+    let (hash, name, mime) = sqlx::query_as::<_, (String, Option<String>, String)>(
+        "SELECT audio_sha256,audio_name,audio_mime FROM sentence_languages
          WHERE user_id=$1 AND sentence_id=$2 AND target_language=$3
          AND deleted_at IS NULL AND audio_sha256 IS NOT NULL",
     )
@@ -250,7 +306,8 @@ pub async fn download_audio(
     .fetch_optional(&state.database)
     .await?
     .ok_or(ApiError::NotFound)?;
-    let bytes = tokio::fs::read(object_path(&state, auth.user_id, &hash)?)
+    let format = stored_format(&mime)?;
+    let bytes = tokio::fs::read(object_path(&state, auth.user_id, &hash, format.extension)?)
         .await
         .map_err(|_| ApiError::NotFound)?;
     if sha256(&bytes) != hash {
@@ -258,7 +315,7 @@ pub async fn download_audio(
         return Err(ApiError::Internal);
     }
     let mut response_headers = HeaderMap::new();
-    response_headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mpeg"));
+    response_headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(format.mime));
     response_headers.insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, max-age=3600"),
@@ -374,6 +431,7 @@ pub async fn generate_audio(
         &target_language,
         &bytes,
         Some(format!("{sentence_id}-{target_language}.mp3")),
+        "audio/mpeg",
     )
     .await?;
     Ok(Json(metadata))
@@ -385,9 +443,10 @@ mod tests {
 
     #[test]
     fn validates_mp3_magic_and_names() {
-        assert!(valid_mp3(b"ID3payload"));
-        assert!(valid_mp3(&[0xff, 0xfb, 0x90]));
-        assert!(!valid_mp3(b"not audio"));
+        assert!(audio_format("audio/mpeg", b"ID3payload").is_some());
+        assert!(audio_format("audio/mpeg", &[0xff, 0xfb, 0x90]).is_some());
+        assert!(audio_format("audio/wav", b"RIFF0000WAVEpayload").is_some());
+        assert!(audio_format("audio/mpeg", b"not audio").is_none());
         assert!(safe_name(Some("bad\nname.mp3")).is_err());
     }
 }

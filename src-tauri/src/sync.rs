@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use sqlx::Row;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use crate::{
@@ -733,6 +734,62 @@ async fn apply_sentence(
         .bind(&language.translation_comment)
         .execute(&mut **tx)
         .await?;
+        if let Some(audio) = &language.audio {
+            sqlx::query(
+                "INSERT INTO sync_audio_state(
+                   sentence_id,target_language,remote_sha256,remote_mime,remote_name
+                 ) VALUES(?,?,?,?,?)
+                 ON CONFLICT(sentence_id,target_language) DO UPDATE SET
+                   remote_sha256=excluded.remote_sha256,remote_mime=excluded.remote_mime,
+                   remote_name=excluded.remote_name,updated_at=CURRENT_TIMESTAMP",
+            )
+            .bind(local_id)
+            .bind(&language.target_language)
+            .bind(&audio.sha256)
+            .bind(&audio.mime)
+            .bind(&audio.name)
+            .execute(&mut **tx)
+            .await?;
+        } else if let Some((local_hash, remote_hash)) =
+            sqlx::query_as::<_, (Option<String>, Option<String>)>(
+                "SELECT local_sha256,remote_sha256 FROM sync_audio_state
+                 WHERE sentence_id=? AND target_language=?",
+            )
+            .bind(local_id)
+            .bind(&language.target_language)
+            .fetch_optional(&mut **tx)
+            .await?
+        {
+            if local_hash == remote_hash {
+                sqlx::query(
+                    "UPDATE sentence_languages SET audio_file=NULL,audio_name=NULL,audio_mime=NULL
+                     WHERE sentence_id=? AND target_language=?",
+                )
+                .bind(local_id)
+                .bind(&language.target_language)
+                .execute(&mut **tx)
+                .await?;
+                sqlx::query(
+                    "UPDATE sync_audio_state SET local_sha256=NULL,remote_sha256=NULL,
+                     remote_mime=NULL,remote_name=NULL,updated_at=CURRENT_TIMESTAMP
+                     WHERE sentence_id=? AND target_language=?",
+                )
+                .bind(local_id)
+                .bind(&language.target_language)
+                .execute(&mut **tx)
+                .await?;
+            } else {
+                sqlx::query(
+                    "UPDATE sync_audio_state SET remote_sha256=NULL,remote_mime=NULL,
+                     remote_name=NULL,updated_at=CURRENT_TIMESTAMP
+                     WHERE sentence_id=? AND target_language=?",
+                )
+                .bind(local_id)
+                .bind(&language.target_language)
+                .execute(&mut **tx)
+                .await?;
+            }
+        }
         let Some(preparation) = language.active_preparation else {
             continue;
         };
@@ -947,8 +1004,255 @@ async fn pull_changes(
     }
 }
 
+fn audio_directory(app: &AppHandle) -> Result<std::path::PathBuf> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| AppError::Sync(error.to_string()))?
+        .join("audio");
+    std::fs::create_dir_all(&directory)?;
+    Ok(directory)
+}
+
+fn file_sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+async fn sync_audio_uploads(
+    state: &AppState,
+    app: &AppHandle,
+    client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+) -> Result<()> {
+    let directory = audio_directory(app)?;
+    let rows = sqlx::query(
+        "SELECT sl.sentence_id,sl.target_language,sl.audio_file,sl.audio_name,sl.audio_mime,
+         ids.remote_id,a.remote_sha256
+         FROM sentence_languages sl
+         JOIN sync_entity_ids ids
+           ON ids.entity_type='sentence' AND ids.local_key=CAST(sl.sentence_id AS TEXT)
+         LEFT JOIN sync_audio_state a
+           ON a.sentence_id=sl.sentence_id AND a.target_language=sl.target_language
+         WHERE sl.audio_file IS NOT NULL",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    for row in rows {
+        let sentence_id = row.get::<i64, _>(0);
+        let target_language = row.get::<String, _>(1);
+        let stored_name = row.get::<String, _>(2);
+        if std::path::Path::new(&stored_name)
+            .file_name()
+            .and_then(|value| value.to_str())
+            != Some(stored_name.as_str())
+        {
+            return Err(AppError::Sync("Invalid local audio path".into()));
+        }
+        let bytes = std::fs::read(directory.join(&stored_name))?;
+        let hash = file_sha256(&bytes);
+        if row.get::<Option<String>, _>(6).as_deref() == Some(hash.as_str()) {
+            continue;
+        }
+        let remote_id = Uuid::parse_str(&row.get::<String, _>(5))
+            .map_err(|_| AppError::Sync("Sentence sync mapping is corrupted".into()))?;
+        let mime = row
+            .get::<Option<String>, _>(4)
+            .unwrap_or_else(|| "audio/mpeg".into());
+        let mut request = client
+            .put(format!("{base_url}/api/v1/sentences/{remote_id}/audio"))
+            .query(&[("targetLanguage", target_language.as_str())])
+            .bearer_auth(token)
+            .header(reqwest::header::CONTENT_TYPE, &mime)
+            .header("x-content-sha256", &hash)
+            .body(bytes);
+        if let Some(name) = row.get::<Option<String>, _>(3) {
+            if name.is_ascii() {
+                request = request.header("x-file-name", name);
+            }
+        }
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            return Err(api_error(response).await);
+        }
+        let metadata: langai_contracts::AudioMetadataResponse = response.json().await?;
+        if metadata.sha256 != hash {
+            return Err(AppError::Sync(
+                "Server confirmed a different audio checksum".into(),
+            ));
+        }
+        sqlx::query(
+            "INSERT INTO sync_audio_state(
+               sentence_id,target_language,local_sha256,remote_sha256
+             ) VALUES(?,?,?,?)
+             ON CONFLICT(sentence_id,target_language) DO UPDATE SET
+               local_sha256=excluded.local_sha256,remote_sha256=excluded.remote_sha256,
+               updated_at=CURRENT_TIMESTAMP",
+        )
+        .bind(sentence_id)
+        .bind(target_language)
+        .bind(&hash)
+        .bind(&hash)
+        .execute(&state.db)
+        .await?;
+    }
+
+    let deleted = sqlx::query(
+        "SELECT a.sentence_id,a.target_language,ids.remote_id
+         FROM sync_audio_state a
+         JOIN sync_entity_ids ids
+           ON ids.entity_type='sentence' AND ids.local_key=CAST(a.sentence_id AS TEXT)
+         LEFT JOIN sentence_languages sl
+           ON sl.sentence_id=a.sentence_id AND sl.target_language=a.target_language
+         WHERE a.remote_sha256 IS NOT NULL
+         AND (sl.sentence_id IS NULL OR sl.audio_file IS NULL)",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    for row in deleted {
+        let sentence_id = row.get::<i64, _>(0);
+        let target_language = row.get::<String, _>(1);
+        let remote_id = Uuid::parse_str(&row.get::<String, _>(2))
+            .map_err(|_| AppError::Sync("Sentence sync mapping is corrupted".into()))?;
+        let response = client
+            .delete(format!("{base_url}/api/v1/sentences/{remote_id}/audio"))
+            .query(&[("targetLanguage", target_language.as_str())])
+            .bearer_auth(token)
+            .send()
+            .await?;
+        if !response.status().is_success() && response.status() != reqwest::StatusCode::NOT_FOUND {
+            return Err(api_error(response).await);
+        }
+        sqlx::query(
+            "DELETE FROM sync_audio_state WHERE sentence_id=? AND target_language=?",
+        )
+        .bind(sentence_id)
+        .bind(target_language)
+        .execute(&state.db)
+        .await?;
+    }
+    Ok(())
+}
+
+fn extension_for_mime(mime: &str) -> Result<&'static str> {
+    match mime {
+        "audio/mpeg" | "audio/mp3" => Ok("mp3"),
+        "audio/wav" | "audio/x-wav" => Ok("wav"),
+        "audio/ogg" => Ok("ogg"),
+        "audio/mp4" | "audio/x-m4a" => Ok("m4a"),
+        "audio/webm" => Ok("webm"),
+        _ => Err(AppError::Sync("Server returned an unsupported audio type".into())),
+    }
+}
+
+async fn sync_audio_downloads(
+    state: &AppState,
+    app: &AppHandle,
+    client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+) -> Result<()> {
+    let directory = audio_directory(app)?;
+    let rows = sqlx::query(
+        "SELECT a.sentence_id,a.target_language,a.remote_sha256,a.remote_mime,a.remote_name,
+         ids.remote_id,sl.audio_file
+         FROM sync_audio_state a
+         JOIN sync_entity_ids ids
+           ON ids.entity_type='sentence' AND ids.local_key=CAST(a.sentence_id AS TEXT)
+         JOIN sentence_languages sl
+           ON sl.sentence_id=a.sentence_id AND sl.target_language=a.target_language
+         WHERE a.remote_sha256 IS NOT NULL
+         AND (a.local_sha256 IS NULL OR a.local_sha256<>a.remote_sha256)",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    for row in rows {
+        let sentence_id = row.get::<i64, _>(0);
+        let target_language = row.get::<String, _>(1);
+        let expected_hash = row.get::<String, _>(2);
+        let expected_mime = row.get::<String, _>(3);
+        let remote_id = Uuid::parse_str(&row.get::<String, _>(5))
+            .map_err(|_| AppError::Sync("Sentence sync mapping is corrupted".into()))?;
+        let response = client
+            .get(format!("{base_url}/api/v1/sentences/{remote_id}/audio"))
+            .query(&[("targetLanguage", target_language.as_str())])
+            .bearer_auth(token)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(api_error(response).await);
+        }
+        let mime = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .unwrap_or(&expected_mime)
+            .to_owned();
+        let bytes = response.bytes().await?;
+        if bytes.is_empty() || bytes.len() > 25 * 1024 * 1024 {
+            return Err(AppError::Sync("Downloaded audio has an invalid size".into()));
+        }
+        let actual_hash = file_sha256(&bytes);
+        if actual_hash != expected_hash {
+            return Err(AppError::Sync(
+                "Downloaded audio checksum does not match".into(),
+            ));
+        }
+        let stored_name = format!("{sentence_id}-{expected_hash}.{}", extension_for_mime(&mime)?);
+        let temporary = directory.join(format!(".{stored_name}.tmp"));
+        std::fs::write(&temporary, &bytes)?;
+        let destination = directory.join(&stored_name);
+        if destination.exists() {
+            std::fs::remove_file(&temporary)?;
+        } else {
+            std::fs::rename(&temporary, &destination)?;
+        }
+        let previous = row.get::<Option<String>, _>(6);
+        let name = row
+            .get::<Option<String>, _>(4)
+            .unwrap_or_else(|| stored_name.clone());
+        let mut tx = state.db.begin().await?;
+        sqlx::query(
+            "UPDATE sentence_languages SET audio_file=?,audio_name=?,audio_mime=?
+             WHERE sentence_id=? AND target_language=?",
+        )
+        .bind(&stored_name)
+        .bind(name)
+        .bind(&mime)
+        .bind(sentence_id)
+        .bind(&target_language)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE sync_audio_state SET local_sha256=?,updated_at=CURRENT_TIMESTAMP
+             WHERE sentence_id=? AND target_language=?",
+        )
+        .bind(&actual_hash)
+        .bind(sentence_id)
+        .bind(&target_language)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        if let Some(previous) = previous {
+            if previous != stored_name
+                && std::path::Path::new(&previous)
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    == Some(previous.as_str())
+            {
+                let _ = std::fs::remove_file(directory.join(previous));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
-pub async fn sync_now(state: State<'_, AppState>) -> Result<SyncStatus> {
+pub async fn sync_now(app: AppHandle, state: State<'_, AppState>) -> Result<SyncStatus> {
     let token = secrets::get_sync_token()?
         .ok_or_else(|| AppError::Sync("Connect an account first".into()))?;
     let base_url =
@@ -1064,7 +1368,25 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<SyncStatus> {
         }
         tx.commit().await?;
     }
+    if let Err(error) = sync_audio_uploads(&state, &app, &client, &base_url, &token).await {
+        let status = if matches!(error, AppError::Http(_) | AppError::Io(_)) {
+            "offline"
+        } else {
+            "error"
+        };
+        mark_sync_failure(&state, status, &error.to_string()).await;
+        return Err(error);
+    }
     if let Err(error) = pull_changes(&state, &client, &base_url, &token).await {
+        let status = if matches!(error, AppError::Http(_)) {
+            "offline"
+        } else {
+            "error"
+        };
+        mark_sync_failure(&state, status, &error.to_string()).await;
+        return Err(error);
+    }
+    if let Err(error) = sync_audio_downloads(&state, &app, &client, &base_url, &token).await {
         let status = if matches!(error, AppError::Http(_)) {
             "offline"
         } else {

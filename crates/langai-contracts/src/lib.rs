@@ -117,6 +117,7 @@ pub struct SentenceLanguageResponse {
     pub error: Option<String>,
     pub translation_comment: Option<String>,
     pub audio_available: bool,
+    pub audio: Option<AudioMetadataResponse>,
     pub revision: i64,
     pub active_preparation: Option<PreparationResponse>,
 }
@@ -187,7 +188,7 @@ pub struct GenerateAudioRequest {
     pub target_language: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioMetadataResponse {
     pub sha256: String,

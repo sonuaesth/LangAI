@@ -55,7 +55,7 @@ impl Config {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("./data/audio"));
         let max_audio_bytes = std::env::var("MAX_AUDIO_BYTES")
-            .unwrap_or_else(|_| "20971520".into())
+            .unwrap_or_else(|_| "26214400".into())
             .parse::<usize>()
             .map_err(|_| anyhow::anyhow!("MAX_AUDIO_BYTES must be a positive integer"))?;
         if max_audio_bytes == 0 || max_audio_bytes > 100 * 1024 * 1024 {
