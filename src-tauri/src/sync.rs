@@ -131,15 +131,16 @@ async fn upload_provider_key(
     provider: &str,
     key: Option<String>,
 ) -> Result<()> {
-    let Some(key) = key else {
-        return Ok(());
+    let request = match key {
+        Some(key) => client
+            .put(format!("{base_url}/api/v1/provider-keys/{provider}"))
+            .bearer_auth(token)
+            .json(&json!({ "apiKey": key })),
+        None => client
+            .delete(format!("{base_url}/api/v1/provider-keys/{provider}"))
+            .bearer_auth(token),
     };
-    let response = client
-        .put(format!("{base_url}/api/v1/provider-keys/{provider}"))
-        .bearer_auth(token)
-        .json(&json!({ "apiKey": key }))
-        .send()
-        .await?;
+    let response = request.send().await?;
     if !response.status().is_success() {
         return Err(api_error(response).await);
     }
@@ -296,6 +297,181 @@ async fn enqueue_initial_snapshot(state: &AppState) -> Result<()> {
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    Ok(())
+}
+
+async fn sync_connected(db: &sqlx::SqlitePool) -> Result<bool> {
+    Ok(
+        sqlx::query_scalar::<_, Option<String>>("SELECT server_url FROM sync_state WHERE id=1")
+            .fetch_one(db)
+            .await?
+            .is_some(),
+    )
+}
+
+async fn sentence_payload(db: &sqlx::SqlitePool, sentence_id: i64) -> Result<serde_json::Value> {
+    let sentence = sqlx::query("SELECT source_text FROM sentences WHERE id=?")
+        .bind(sentence_id)
+        .fetch_optional(db)
+        .await?
+        .ok_or_else(|| AppError::Sync("Sentence was removed before it could be queued".into()))?;
+    let languages = sqlx::query_scalar::<_, String>(
+        "SELECT target_language FROM sentence_languages
+         WHERE sentence_id=? ORDER BY target_language",
+    )
+    .bind(sentence_id)
+    .fetch_all(db)
+    .await?;
+    let topics = sqlx::query_scalar::<_, String>(
+        "SELECT t.name FROM topics t JOIN sentence_topics st ON st.topic_id=t.id
+         WHERE st.sentence_id=? ORDER BY t.name",
+    )
+    .bind(sentence_id)
+    .fetch_all(db)
+    .await?;
+    let preparation_rows = sqlx::query(
+        "SELECT p.id,p.version,p.target_language,p.model,p.translation,
+         EXISTS(
+           SELECT 1 FROM sentence_languages sl
+           WHERE sl.sentence_id=p.sentence_id AND sl.target_language=p.target_language
+           AND sl.active_preparation_id=p.id
+         )
+         FROM preparations p WHERE p.sentence_id=? ORDER BY p.version",
+    )
+    .bind(sentence_id)
+    .fetch_all(db)
+    .await?;
+    let mut preparations = Vec::with_capacity(preparation_rows.len());
+    for preparation in preparation_rows {
+        let preparation_id = preparation.get::<i64, _>(0);
+        let block_rows = sqlx::query(
+            "SELECT id,position,correct,hint FROM blocks
+             WHERE preparation_id=? ORDER BY position",
+        )
+        .bind(preparation_id)
+        .fetch_all(db)
+        .await?;
+        let mut blocks = Vec::with_capacity(block_rows.len());
+        for block in block_rows {
+            let distractors = sqlx::query_scalar::<_, String>(
+                "SELECT text FROM options WHERE block_id=? AND is_correct=0 ORDER BY id",
+            )
+            .bind(block.get::<i64, _>(0))
+            .fetch_all(db)
+            .await?;
+            blocks.push(json!({
+                "position": block.get::<i64, _>(1),
+                "correct": block.get::<String, _>(2),
+                "hint": block.get::<Option<String>, _>(3),
+                "distractors": distractors
+            }));
+        }
+        preparations.push(json!({
+            "version": preparation.get::<i64, _>(1),
+            "targetLanguage": preparation.get::<String, _>(2),
+            "model": preparation.get::<String, _>(3),
+            "translation": preparation.get::<String, _>(4),
+            "active": preparation.get::<i64, _>(5) == 1,
+            "blocks": blocks
+        }));
+    }
+    Ok(json!({
+        "sourceText": sentence.get::<String, _>(0),
+        "targetLanguages": languages,
+        "topics": topics,
+        "preparations": preparations
+    }))
+}
+
+pub async fn enqueue_sentence_upsert(db: &sqlx::SqlitePool, sentence_id: i64) -> Result<()> {
+    if !sync_connected(db).await? {
+        return Ok(());
+    }
+    let mut tx = db.begin().await?;
+    let entity_id = remote_id(&mut tx, "sentence", &sentence_id.to_string()).await?;
+    let base_revision = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT server_revision FROM sync_entity_ids
+         WHERE entity_type='sentence' AND local_key=?",
+    )
+    .bind(sentence_id.to_string())
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let payload = sentence_payload(db, sentence_id).await?;
+    sqlx::query(
+        "INSERT INTO sync_outbox(
+           operation_id,kind,entity_id,base_revision,payload
+         ) VALUES(?,'sentence.upsert',?,?,?)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(entity_id.to_string())
+    .bind(base_revision)
+    .bind(payload.to_string())
+    .execute(db)
+    .await?;
+    sqlx::query("UPDATE sync_state SET status='pending' WHERE id=1")
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+pub async fn enqueue_sentence_delete(db: &sqlx::SqlitePool, sentence_id: i64) -> Result<()> {
+    if !sync_connected(db).await? {
+        return Ok(());
+    }
+    let mut tx = db.begin().await?;
+    let entity_id = remote_id(&mut tx, "sentence", &sentence_id.to_string()).await?;
+    let base_revision = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT server_revision FROM sync_entity_ids
+         WHERE entity_type='sentence' AND local_key=?",
+    )
+    .bind(sentence_id.to_string())
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO sync_outbox(operation_id,kind,entity_id,base_revision)
+         VALUES(?,'sentence.delete',?,?)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(entity_id.to_string())
+    .bind(base_revision)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE sync_state SET status='pending' WHERE id=1")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn enqueue_settings(db: &sqlx::SqlitePool) -> Result<()> {
+    if !sync_connected(db).await? {
+        return Ok(());
+    }
+    let row = sqlx::query(
+        "SELECT model,target_language,elevenlabs_voice_id,elevenlabs_voice_name
+         FROM settings WHERE id=1",
+    )
+    .fetch_one(db)
+    .await?;
+    let payload = json!({
+        "model": row.get::<String, _>(0),
+        "targetLanguage": row.get::<String, _>(1),
+        "elevenlabsVoiceId": row.get::<Option<String>, _>(2),
+        "elevenlabsVoiceName": row.get::<Option<String>, _>(3)
+    });
+    sqlx::query(
+        "INSERT INTO sync_outbox(operation_id,kind,entity_id,payload)
+         VALUES(?,'settings.upsert',?,?)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(Uuid::nil().to_string())
+    .bind(payload.to_string())
+    .execute(db)
+    .await?;
+    sqlx::query("UPDATE sync_state SET status='pending' WHERE id=1")
+        .execute(db)
+        .await?;
     Ok(())
 }
 
@@ -786,6 +962,24 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<SyncStatus> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()?;
+    if let Err(error) =
+        upload_provider_key(&client, &base_url, &token, "openai", secrets::get()?).await
+    {
+        mark_sync_failure(&state, "error", &error.to_string()).await;
+        return Err(error);
+    }
+    if let Err(error) = upload_provider_key(
+        &client,
+        &base_url,
+        &token,
+        "elevenlabs",
+        secrets::get_elevenlabs()?,
+    )
+    .await
+    {
+        mark_sync_failure(&state, "error", &error.to_string()).await;
+        return Err(error);
+    }
 
     loop {
         let rows = sqlx::query(
@@ -848,9 +1042,8 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<SyncStatus> {
             .map(|result| result.operation_id)
             .collect::<std::collections::HashSet<_>>();
         if confirmed_operation_ids != expected_operation_ids {
-            let error = AppError::Sync(
-                "Server returned an incomplete synchronization confirmation".into(),
-            );
+            let error =
+                AppError::Sync("Server returned an incomplete synchronization confirmation".into());
             mark_sync_failure(&state, "error", &error.to_string()).await;
             return Err(error);
         }

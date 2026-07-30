@@ -400,6 +400,7 @@ pub async fn add_sentences(
         return Err(AppError::Input("Translation comment is too long".into()));
     }
     validate_topic(&topic)?;
+    let mut changed_ids = std::collections::HashSet::new();
     for text in texts
         .into_iter()
         .map(|x| x.trim().to_owned())
@@ -429,6 +430,10 @@ pub async fn add_sentences(
         .execute(&s.db)
         .await?;
         assign_topic(&s.db, id, topic.as_deref()).await?;
+        changed_ids.insert(id);
+    }
+    for id in changed_ids {
+        crate::sync::enqueue_sentence_upsert(&s.db, id).await?;
     }
     list_sentences(None, Some(target_language), None, s).await
 }
@@ -459,6 +464,7 @@ async fn assign_topic(db: &sqlx::SqlitePool, sentence_id: i64, topic: Option<&st
 #[tauri::command]
 pub async fn delete_sentences(ids: Vec<i64>, s: State<'_, AppState>) -> Result<()> {
     for id in ids {
+        crate::sync::enqueue_sentence_delete(&s.db, id).await?;
         sqlx::query("DELETE FROM sentences WHERE id=?")
             .bind(id)
             .execute(&s.db)
@@ -492,6 +498,7 @@ pub async fn save_settings(model: String, s: State<'_, AppState>) -> Result<Sett
         .bind(model)
         .execute(&s.db)
         .await?;
+    crate::sync::enqueue_settings(&s.db).await?;
     settings_inner(&s).await
 }
 #[tauri::command]
@@ -535,6 +542,7 @@ pub async fn delete_elevenlabs_key(s: State<'_, AppState>) -> Result<Settings> {
     )
     .execute(&s.db)
     .await?;
+    crate::sync::enqueue_settings(&s.db).await?;
     settings_inner(&s).await
 }
 
@@ -559,6 +567,7 @@ pub async fn save_elevenlabs_voice(
         .bind(voice_name)
         .execute(&s.db)
         .await?;
+    crate::sync::enqueue_settings(&s.db).await?;
     settings_inner(&s).await
 }
 async fn persist(
@@ -605,6 +614,7 @@ async fn persist(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    crate::sync::enqueue_sentence_upsert(&state.db, id).await?;
     Ok(())
 }
 #[tauri::command]
