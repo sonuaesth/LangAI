@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod elevenlabs;
 mod error;
 mod exercise;
 mod openai;
@@ -28,6 +29,7 @@ pub fn run() {
             commands::save_sentence_audio,
             commands::delete_sentence_audio,
             commands::sentence_audio,
+            commands::generate_sentence_audio,
             commands::add_sentences,
             commands::delete_sentences,
             commands::get_settings,
@@ -36,6 +38,11 @@ pub fn run() {
             commands::list_available_models,
             commands::save_api_key,
             commands::delete_api_key,
+            commands::verify_elevenlabs_key,
+            commands::save_elevenlabs_key,
+            commands::delete_elevenlabs_key,
+            commands::list_elevenlabs_voices,
+            commands::save_elevenlabs_voice,
             commands::prepare_sentences,
             commands::list_topics,
             commands::exercise_languages,

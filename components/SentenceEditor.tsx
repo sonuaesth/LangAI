@@ -90,6 +90,17 @@ export function SentenceEditor({ sentenceId, onClose, onSaved }: { sentenceId:nu
     finally { setAudioBusy(false); }
   }
 
+  async function generateAudio() {
+    setAudioBusy(true); setError("");
+    try {
+      await api.generateAudio(sentenceId, draft.targetLanguage);
+      const value = await api.sentenceDetails(sentenceId);
+      setDetails(value);
+      setAudioFiles(Object.fromEntries(value.translations.filter(item => item.audioName).map(item => [item.targetLanguage, { name:item.audioName!, mime:item.audioMime ?? "audio/mpeg" }])));
+    } catch (reason) { setError(String(reason)); }
+    finally { setAudioBusy(false); }
+  }
+
   return <div className="editorBackdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="sentenceEditor" role="dialog" aria-modal="true" aria-label="Редактор предложения">
       <div className="editorHeader"><div><span>Карточка предложения</span><h2>{details?.sourceText ?? "Загрузка…"}</h2>{details?.topics.length ? <div className="editorTopics">{details.topics.map(item => <i key={item}>#{item}</i>)}</div> : null}</div><button className="editorClose" onClick={onClose} aria-label="Закрыть">×</button></div>
@@ -98,7 +109,7 @@ export function SentenceEditor({ sentenceId, onClose, onSaved }: { sentenceId:nu
         <div className="availableTranslations"><span>Готовые переводы:</span>{details?.translations.length ? details.translations.map(item => <button className={item.targetLanguage === draft.targetLanguage ? "active" : ""} key={item.targetLanguage} onClick={() => chooseLanguage(item.targetLanguage)}>{item.targetLanguage}</button>) : <small>пока нет</small>}</div>
       </div>
       <label className="editorField"><span>Готовый перевод</span><input value={draft.translation} onChange={event => setDraft(current => ({ ...current, translation: event.target.value }))} placeholder="Ich bin früh in Italien eingeschlafen."/></label>
-      <div className="audioAttachment"><div><strong>Аудио для языка {draft.targetLanguage}</strong><small>{audioFiles[draft.targetLanguage]?.name ?? "Файл пока не добавлен. Поддерживаются MP3, WAV, OGG, M4A и WebM до 25 МБ."}</small></div><label className="audioUpload"><input type="file" accept="audio/mpeg,audio/wav,audio/ogg,audio/mp4,audio/webm,.mp3,.wav,.ogg,.m4a,.webm" disabled={audioBusy} onChange={event => { void uploadAudio(event.target.files?.[0]); event.currentTarget.value = ""; }}/>{audioBusy ? "Обработка…" : audioFiles[draft.targetLanguage] ? "Заменить аудио" : "Добавить аудио"}</label>{audioFiles[draft.targetLanguage] && <><button disabled={audioBusy} onClick={() => void playAudio()}>▶ Прослушать</button><button className="danger" disabled={audioBusy} onClick={() => void deleteAudio()}>Удалить аудио</button></>}</div>
+      <div className="audioAttachment"><div><strong>Аудио для языка {draft.targetLanguage}</strong><small>{audioFiles[draft.targetLanguage]?.name ?? "Файл пока не добавлен. Поддерживаются MP3, WAV, OGG, M4A и WebM до 25 МБ."}</small></div><button className="generateVoice" disabled={audioBusy || !details?.translations.some(item => item.targetLanguage === draft.targetLanguage)} onClick={() => void generateAudio()}>{audioBusy ? "Обработка…" : "Озвучить через ElevenLabs"}</button><label className="audioUpload"><input type="file" accept="audio/mpeg,audio/wav,audio/ogg,audio/mp4,audio/webm,.mp3,.wav,.ogg,.m4a,.webm" disabled={audioBusy} onChange={event => { void uploadAudio(event.target.files?.[0]); event.currentTarget.value = ""; }}/>{audioFiles[draft.targetLanguage] ? "Заменить файлом" : "Добавить свой файл"}</label>{audioFiles[draft.targetLanguage] && <><button disabled={audioBusy} onClick={() => void playAudio()}>▶ Прослушать</button><button className="danger" disabled={audioBusy} onClick={() => void deleteAudio()}>Удалить аудио</button></>}</div>
       <div className="positionsHeader"><div><h3>Позиции предложения</h3><small>В каждой позиции: правильный вариант и три неверных.</small></div><button onClick={() => setDraft(current => ({ ...current, translation: current.blocks.map(block => block.correct.trim()).filter(Boolean).join(" ") }))}>Собрать перевод из позиций</button></div>
       <div className="manualBlocks">{draft.blocks.map((block, index) => <article
         className={`manualBlock ${draggedIndex === index ? "dragging" : ""}`}

@@ -1,11 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { Exercise, ManualTranslation, Progress, Sentence, SentenceDetails, Settings } from "./types";
+import type { ElevenLabsVoice, Exercise, ManualTranslation, Progress, Sentence, SentenceDetails, Settings } from "./types";
 const call = <T>(command:string,args:Record<string,unknown>={}) => invoke<T>(command,args);
 export const api = {
   listSentences:(filterLanguage?:string,targetLanguage?:string,filterTopic?:string)=>call<Sentence[]>("list_sentences",{filterLanguage:filterLanguage??null,targetLanguage:targetLanguage??null,filterTopic:filterTopic??null}), addSentences:(texts:string[],targetLanguage:string,translationComment?:string,topic?:string)=>call<Sentence[]>("add_sentences",{texts,targetLanguage,translationComment:translationComment?.trim()||null,topic:topic?.trim()||null}),
   sentenceDetails:(id:number)=>call<SentenceDetails>("sentence_details",{id}), saveManualTranslation:(sentenceId:number,translation:ManualTranslation)=>call<void>("save_manual_translation",{sentenceId,translation}),
   saveAudio:(sentenceId:number,targetLanguage:string,fileName:string,mimeType:string,bytes:number[])=>call<void>("save_sentence_audio",{sentenceId,targetLanguage,fileName,mimeType,bytes}), deleteAudio:(sentenceId:number,targetLanguage:string)=>call<void>("delete_sentence_audio",{sentenceId,targetLanguage}), sentenceAudio:(sentenceId:number,targetLanguage:string)=>call<{mimeType:string;bytes:number[]}>("sentence_audio",{sentenceId,targetLanguage}),
+  generateAudio:(sentenceId:number,targetLanguage:string)=>call<void>("generate_sentence_audio",{sentenceId,targetLanguage}), verifyElevenLabsKey:(apiKey:string)=>call<ElevenLabsVoice[]>("verify_elevenlabs_key",{apiKey}), saveElevenLabsKey:(apiKey:string)=>call<Settings>("save_elevenlabs_key",{apiKey}), deleteElevenLabsKey:()=>call<Settings>("delete_elevenlabs_key"), elevenLabsVoices:()=>call<ElevenLabsVoice[]>("list_elevenlabs_voices"), saveElevenLabsVoice:(voiceId:string,voiceName:string)=>call<Settings>("save_elevenlabs_voice",{voiceId,voiceName}),
   deleteSentences:(ids:number[])=>call<void>("delete_sentences",{ids}), prepare:(ids?:number[],targetLanguage?:string,translationComment?:string,topic?:string)=>call<void>("prepare_sentences",{ids:ids??null,targetLanguage:targetLanguage??null,translationComment:translationComment?.trim()||null,topic:topic?.trim()||null}),
   settings:()=>call<Settings>("get_settings"), saveSettings:(model:string)=>call<Settings>("save_settings",{model}),
   listModels:()=>call<string[]>("list_available_models"),

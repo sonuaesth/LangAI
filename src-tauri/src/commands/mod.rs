@@ -1,4 +1,5 @@
 use crate::{
+    elevenlabs,
     error::{AppError, Result},
     openai, secrets, AppState,
 };
@@ -62,8 +63,11 @@ pub struct AudioData {
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub api_key_configured: bool,
+    pub elevenlabs_key_configured: bool,
     pub model: String,
     pub target_language: String,
+    pub elevenlabs_voice_id: Option<String>,
+    pub elevenlabs_voice_name: Option<String>,
 }
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -285,6 +289,51 @@ pub async fn sentence_audio(
 }
 
 #[tauri::command]
+pub async fn generate_sentence_audio(
+    sentence_id: i64,
+    target_language: String,
+    app: AppHandle,
+    s: State<'_, AppState>,
+) -> Result<()> {
+    let key = secrets::get_elevenlabs()?
+        .ok_or_else(|| AppError::Input("Configure an ElevenLabs API key first".into()))?;
+    let settings = settings_inner(&s).await?;
+    let voice_id = settings
+        .elevenlabs_voice_id
+        .ok_or_else(|| AppError::Input("Select an ElevenLabs voice in settings".into()))?;
+    let voice_name = settings
+        .elevenlabs_voice_name
+        .unwrap_or_else(|| "ElevenLabs".into());
+    let row = sqlx::query("SELECT p.translation,sl.audio_file FROM sentence_languages sl JOIN preparations p ON p.id=sl.active_preparation_id WHERE sl.sentence_id=? AND sl.target_language=? AND sl.status='ready'")
+        .bind(sentence_id).bind(&target_language).fetch_optional(&s.db).await?
+        .ok_or_else(|| AppError::Input("Prepare this translation before generating audio".into()))?;
+    let text: String = row.get(0);
+    let previous: Option<String> = row.get(1);
+    let bytes = elevenlabs::synthesize(&key, &voice_id, &text).await?;
+    if bytes.is_empty() || bytes.len() > 25 * 1024 * 1024 {
+        return Err(AppError::ElevenLabs(
+            "The generated audio has an invalid size".into(),
+        ));
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| AppError::Input(error.to_string()))?
+        .as_millis();
+    let stored_name = format!("{sentence_id}-{stamp}.mp3");
+    let directory = audio_directory(&app)?;
+    std::fs::write(directory.join(&stored_name), bytes).map_err(audio_error)?;
+    let display_name = format!("ElevenLabs — {voice_name}.mp3");
+    sqlx::query("UPDATE sentence_languages SET audio_file=?,audio_name=?,audio_mime='audio/mpeg' WHERE sentence_id=? AND target_language=?")
+        .bind(&stored_name).bind(display_name).bind(sentence_id).bind(target_language).execute(&s.db).await?;
+    if let Some(old_name) = previous {
+        if old_name != stored_name {
+            let _ = std::fs::remove_file(directory.join(old_name));
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn save_manual_translation(
     sentence_id: i64,
     translation: ManualTranslation,
@@ -418,13 +467,16 @@ pub async fn delete_sentences(ids: Vec<i64>, s: State<'_, AppState>) -> Result<(
     Ok(())
 }
 async fn settings_inner(s: &AppState) -> Result<Settings> {
-    let r = sqlx::query("SELECT model,target_language FROM settings WHERE id=1")
+    let r = sqlx::query("SELECT model,target_language,elevenlabs_voice_id,elevenlabs_voice_name FROM settings WHERE id=1")
         .fetch_one(&s.db)
         .await?;
     Ok(Settings {
         api_key_configured: secrets::get()?.is_some(),
+        elevenlabs_key_configured: secrets::get_elevenlabs()?.is_some(),
         model: r.get(0),
         target_language: r.get(1),
+        elevenlabs_voice_id: r.get(2),
+        elevenlabs_voice_name: r.get(3),
     })
 }
 #[tauri::command]
@@ -461,6 +513,52 @@ pub async fn save_api_key(api_key: String, s: State<'_, AppState>) -> Result<Set
 #[tauri::command]
 pub async fn delete_api_key(s: State<'_, AppState>) -> Result<Settings> {
     secrets::delete()?;
+    settings_inner(&s).await
+}
+
+#[tauri::command]
+pub async fn verify_elevenlabs_key(api_key: String) -> Result<Vec<elevenlabs::Voice>> {
+    elevenlabs::voices(&api_key).await
+}
+
+#[tauri::command]
+pub async fn save_elevenlabs_key(api_key: String, s: State<'_, AppState>) -> Result<Settings> {
+    secrets::set_elevenlabs(&api_key)?;
+    settings_inner(&s).await
+}
+
+#[tauri::command]
+pub async fn delete_elevenlabs_key(s: State<'_, AppState>) -> Result<Settings> {
+    secrets::delete_elevenlabs()?;
+    sqlx::query(
+        "UPDATE settings SET elevenlabs_voice_id=NULL,elevenlabs_voice_name=NULL WHERE id=1",
+    )
+    .execute(&s.db)
+    .await?;
+    settings_inner(&s).await
+}
+
+#[tauri::command]
+pub async fn list_elevenlabs_voices() -> Result<Vec<elevenlabs::Voice>> {
+    let key = secrets::get_elevenlabs()?
+        .ok_or_else(|| AppError::Input("Configure an ElevenLabs API key first".into()))?;
+    elevenlabs::voices(&key).await
+}
+
+#[tauri::command]
+pub async fn save_elevenlabs_voice(
+    voice_id: String,
+    voice_name: String,
+    s: State<'_, AppState>,
+) -> Result<Settings> {
+    if voice_id.trim().is_empty() {
+        return Err(AppError::Input("Select an ElevenLabs voice".into()));
+    }
+    sqlx::query("UPDATE settings SET elevenlabs_voice_id=?,elevenlabs_voice_name=? WHERE id=1")
+        .bind(voice_id)
+        .bind(voice_name)
+        .execute(&s.db)
+        .await?;
     settings_inner(&s).await
 }
 async fn persist(

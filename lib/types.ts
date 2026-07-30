@@ -4,7 +4,8 @@ export interface Sentence { id:number; sourceText:string; languages:SentenceLang
 export interface Option { id:number; text:string; isCorrect:boolean }
 export interface Block { id:number; position:number; correct:string; prefix:string; suffix:string; hint?:string|null; options:Option[] }
 export interface Exercise { sentenceId:number; sourceText:string; targetLanguage:string; translation:string; audioAvailable:boolean; blocks:Block[] }
-export interface Settings { apiKeyConfigured:boolean; model:string; targetLanguage:string }
+export interface Settings { apiKeyConfigured:boolean; elevenlabsKeyConfigured:boolean; model:string; targetLanguage:string; elevenlabsVoiceId?:string|null; elevenlabsVoiceName?:string|null }
+export interface ElevenLabsVoice { voiceId:string; name:string }
 export interface Progress { sentenceId:number; status:Status; completed:number; total:number; error?:string }
 export interface ManualBlock { correct:string; distractors:string[]; hint?:string|null }
 export interface ManualTranslation { targetLanguage:string; translation:string; blocks:ManualBlock[]; audioName?:string|null; audioMime?:string|null }

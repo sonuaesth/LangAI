@@ -11,6 +11,8 @@ pub enum AppError {
     Secret(String),
     #[error("OpenAI: {0}")]
     OpenAi(String),
+    #[error("ElevenLabs: {0}")]
+    ElevenLabs(String),
     #[error("Invalid response: {0}")]
     Validation(String),
     #[error("{0}")]
