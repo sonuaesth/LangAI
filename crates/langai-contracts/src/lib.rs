@@ -81,6 +81,77 @@ pub struct SessionResponse {
     pub user: Option<AuthUser>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsResponse {
+    pub model: String,
+    pub target_language: String,
+    pub elevenlabs_voice_id: Option<String>,
+    pub elevenlabs_voice_name: Option<String>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSettingsRequest {
+    pub model: String,
+    pub target_language: String,
+    pub elevenlabs_voice_id: Option<String>,
+    pub elevenlabs_voice_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSentenceRequest {
+    pub source_text: String,
+    pub target_languages: Vec<String>,
+    #[serde(default)]
+    pub topics: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentenceLanguageResponse {
+    pub target_language: String,
+    pub status: String,
+    pub error: Option<String>,
+    pub translation_comment: Option<String>,
+    pub audio_available: bool,
+    pub revision: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentenceResponse {
+    pub id: Uuid,
+    pub source_text: String,
+    pub created_at: String,
+    pub revision: i64,
+    pub languages: Vec<SentenceLanguageResponse>,
+    pub topics: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProviderKeyRequest {
+    pub api_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderKeyStatus {
+    pub provider: String,
+    pub configured: bool,
+    pub key_hint: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareSentenceRequest {
+    pub target_language: String,
+    pub translation_comment: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

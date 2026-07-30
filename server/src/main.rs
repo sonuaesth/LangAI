@@ -1,7 +1,10 @@
 mod auth;
 mod config;
+mod domain;
 mod error;
+mod openai;
 mod routes;
+mod secrets;
 mod state;
 
 use config::Config;

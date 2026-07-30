@@ -25,6 +25,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-langai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-langai}
       RUST_LOG: ${RUST_LOG:-langai_server=info,tower_http=info}
       SESSION_PEPPER: ${SESSION_PEPPER}
+      SECRETS_MASTER_KEY: ${SECRETS_MASTER_KEY}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-2592000}
       REGISTRATION_MODE: ${REGISTRATION_MODE:-invite}
     ports:

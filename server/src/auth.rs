@@ -29,6 +29,13 @@ struct SessionTokens {
     csrf: String,
 }
 
+pub struct AuthContext {
+    pub user_id: Uuid,
+    #[allow(dead_code)] // Used by the upcoming sync operation audit trail.
+    pub device_id: Option<Uuid>,
+    session_csrf: Option<Vec<u8>>,
+}
+
 fn normalize_email(value: &str) -> Result<String, ApiError> {
     let email = value.trim().to_lowercase();
     if email.len() > 254
@@ -329,6 +336,37 @@ fn require_csrf(
         return Err(ApiError::Forbidden);
     }
     Ok(())
+}
+
+pub async fn authenticate_request(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<AuthContext, ApiError> {
+    if headers.contains_key(header::AUTHORIZATION) {
+        let (user_id, _, device_id) = device_user_from_headers(state, headers).await?;
+        return Ok(AuthContext {
+            user_id,
+            device_id: Some(device_id),
+            session_csrf: None,
+        });
+    }
+    let (user_id, _, _, expected_csrf) = session_from_headers(state, headers).await?;
+    Ok(AuthContext {
+        user_id,
+        device_id: None,
+        session_csrf: Some(expected_csrf),
+    })
+}
+
+pub fn require_mutation_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+    auth: &AuthContext,
+) -> Result<(), ApiError> {
+    match &auth.session_csrf {
+        Some(expected) => require_csrf(state, headers, expected),
+        None => Ok(()),
+    }
 }
 
 pub async fn create_device_token(

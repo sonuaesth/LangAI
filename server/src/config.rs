@@ -1,5 +1,7 @@
 use std::{net::SocketAddr, str::FromStr};
 
+use base64::{engine::general_purpose::STANDARD, Engine};
+
 #[derive(Clone)]
 pub struct Config {
     pub bind: SocketAddr,
@@ -9,6 +11,7 @@ pub struct Config {
     pub session_ttl_seconds: i64,
     pub registration_open: bool,
     pub secure_cookies: bool,
+    pub secrets_master_key: [u8; 32],
 }
 
 impl Config {
@@ -38,6 +41,14 @@ impl Config {
             _ => anyhow::bail!("REGISTRATION_MODE must be open or invite"),
         };
         let secure_cookies = environment != "development";
+        let encoded_master_key = std::env::var("SECRETS_MASTER_KEY")
+            .map_err(|_| anyhow::anyhow!("SECRETS_MASTER_KEY is required"))?;
+        let decoded_master_key = STANDARD
+            .decode(encoded_master_key)
+            .map_err(|_| anyhow::anyhow!("SECRETS_MASTER_KEY must be valid base64"))?;
+        let secrets_master_key: [u8; 32] = decoded_master_key
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("SECRETS_MASTER_KEY must decode to exactly 32 bytes"))?;
         Ok(Self {
             bind: SocketAddr::from_str(&bind)
                 .map_err(|error| anyhow::anyhow!("invalid LANGAI_BIND: {error}"))?,
@@ -47,6 +58,7 @@ impl Config {
             session_ttl_seconds,
             registration_open,
             secure_cookies,
+            secrets_master_key,
         })
     }
 }

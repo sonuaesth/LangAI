@@ -23,6 +23,8 @@ pub enum ApiError {
     Conflict(String),
     #[error("invalid email or password")]
     InvalidCredentials,
+    #[error("{0}")]
+    Provider(String),
 }
 
 impl ApiError {
@@ -34,6 +36,7 @@ impl ApiError {
             Self::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
             Self::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
             Self::InvalidCredentials => (StatusCode::UNAUTHORIZED, "invalid_credentials"),
+            Self::Provider(_) => (StatusCode::BAD_GATEWAY, "provider_error"),
             Self::Database(_) | Self::Internal => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
             }
