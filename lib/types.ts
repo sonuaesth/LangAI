@@ -11,3 +11,14 @@ export interface Progress { sentenceId:EntityId; status:Status; completed:number
 export interface ManualBlock { correct:string; distractors:string[]; hint?:string|null }
 export interface ManualTranslation { targetLanguage:string; translation:string; blocks:ManualBlock[]; audioName?:string|null; audioMime?:string|null }
 export interface SentenceDetails { id:EntityId; sourceText:string; topics:string[]; translations:ManualTranslation[] }
+export interface SyncStatus {
+  connected:boolean;
+  serverUrl?:string|null;
+  userId?:string|null;
+  deviceId?:string|null;
+  status:string;
+  pendingOperations:number;
+  lastError?:string|null;
+  lastSyncAt?:string|null;
+  initialUploadCompleted:boolean;
+}

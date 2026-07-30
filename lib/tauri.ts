@@ -9,11 +9,13 @@ import type {
   Sentence,
   SentenceDetails,
   Settings,
+  SyncStatus,
 } from "./types";
 import { webApi } from "./web";
 
 const isDesktop = () =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+export const isDesktopApp = isDesktop;
 const call = <T>(command: string, args: Record<string, unknown> = {}) =>
   invoke<T>(command, args);
 const select = <T>(desktop: () => Promise<T>, web: () => Promise<T>) =>
@@ -82,4 +84,9 @@ export const api = {
     isDesktop()
       ? listen<Progress>("preparation-progress", event => handler(event.payload))
       : webApi.onProgress(handler),
+  syncStatus: () => call<SyncStatus>("sync_status"),
+  connectSync: (serverUrl: string, email: string, password: string, deviceName: string) =>
+    call<SyncStatus>("connect_sync_account", { serverUrl, email, password, deviceName }),
+  syncNow: () => call<SyncStatus>("sync_now"),
+  disconnectSync: () => call<SyncStatus>("disconnect_sync_account"),
 };

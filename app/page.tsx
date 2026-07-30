@@ -1,16 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BookOpenCheck, ListPlus, Settings as SettingsIcon } from "lucide-react";
 import { AuthGate } from "@/components/AuthGate";
 import { ExerciseView } from "@/components/ExerciseView";
 import { SentencesView } from "@/components/SentencesView";
 import { SettingsView } from "@/components/SettingsView";
+import { api, isDesktopApp } from "@/lib/tauri";
 
 type Tab = "exercise" | "sentences" | "settings";
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>("exercise");
+  useEffect(() => {
+    if (!isDesktopApp()) return;
+    const synchronize = () => api.syncStatus()
+      .then(status => status.connected ? api.syncNow() : undefined)
+      .catch(() => undefined);
+    void synchronize();
+    const timer = window.setInterval(synchronize, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const items = [
     ["exercise", "Упражнения", BookOpenCheck],
     ["sentences", "Предложения", ListPlus],

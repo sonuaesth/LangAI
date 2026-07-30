@@ -229,7 +229,10 @@ async fn upsert_sentence(
                 if block.position < 0
                     || block.correct.trim().is_empty()
                     || block.correct.chars().count() > 200
-                    || block.distractors.len() != 3
+                    // Older desktop releases generated four distractors. Accept
+                    // both persisted formats during the initial cloud import;
+                    // newly generated preparations still use exactly three.
+                    || !(3..=4).contains(&block.distractors.len())
                 {
                     return Err(ApiError::InvalidInput("Invalid imported block".into()));
                 }

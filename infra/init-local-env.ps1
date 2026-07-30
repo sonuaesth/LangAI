@@ -1,5 +1,7 @@
 param([switch]$Force)
 
+$ErrorActionPreference = "Stop"
+
 $target = Join-Path (Split-Path $PSScriptRoot -Parent) ".env"
 if ((Test-Path -LiteralPath $target) -and -not $Force) {
     throw ".env already exists. Use -Force only if you intentionally want to replace local secrets."
@@ -8,12 +10,18 @@ if ((Test-Path -LiteralPath $target) -and -not $Force) {
 $databaseBytes = New-Object byte[] 24
 $pepperBytes = New-Object byte[] 32
 $masterKeyBytes = New-Object byte[] 32
-[Security.Cryptography.RandomNumberGenerator]::Fill($databaseBytes)
-[Security.Cryptography.RandomNumberGenerator]::Fill($pepperBytes)
-[Security.Cryptography.RandomNumberGenerator]::Fill($masterKeyBytes)
+$random = [Security.Cryptography.RandomNumberGenerator]::Create()
+try {
+    $random.GetBytes($databaseBytes)
+    $random.GetBytes($pepperBytes)
+    $random.GetBytes($masterKeyBytes)
+}
+finally {
+    $random.Dispose()
+}
 
-$databasePassword = [Convert]::ToHexString($databaseBytes).ToLowerInvariant()
-$sessionPepper = [Convert]::ToHexString($pepperBytes).ToLowerInvariant()
+$databasePassword = -join ($databaseBytes | ForEach-Object { $_.ToString("x2") })
+$sessionPepper = -join ($pepperBytes | ForEach-Object { $_.ToString("x2") })
 $masterKey = [Convert]::ToBase64String($masterKeyBytes)
 
 @(
