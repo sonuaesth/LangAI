@@ -9,6 +9,8 @@ use langai_contracts::{ApiErrorBody, ApiErrorDetail};
 pub enum ApiError {
     #[error("database request failed")]
     Database(#[from] sqlx::Error),
+    #[error("internal error")]
+    Internal,
     #[error("{0}")]
     InvalidInput(String),
     #[error("resource not found")]
@@ -17,6 +19,10 @@ pub enum ApiError {
     Unauthorized,
     #[error("access denied")]
     Forbidden,
+    #[error("{0}")]
+    Conflict(String),
+    #[error("invalid email or password")]
+    InvalidCredentials,
 }
 
 impl ApiError {
@@ -26,7 +32,11 @@ impl ApiError {
             Self::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             Self::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
-            Self::Database(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
+            Self::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
+            Self::InvalidCredentials => (StatusCode::UNAUTHORIZED, "invalid_credentials"),
+            Self::Database(_) | Self::Internal => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
+            }
         }
     }
 }
@@ -34,7 +44,7 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, code) = self.status_and_code();
-        if matches!(self, Self::Database(_)) {
+        if matches!(self, Self::Database(_) | Self::Internal) {
             tracing::error!(error = ?self, "request failed");
         }
         let message = if status.is_server_error() {

@@ -1,3 +1,4 @@
+mod auth;
 mod config;
 mod error;
 mod routes;
@@ -27,10 +28,11 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     sqlx::migrate!("./migrations").run(&database).await?;
 
-    let app = routes::router(AppState { database })
+    let bind = config.bind;
+    let app = routes::router(AppState { database, config })
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http());
-    let listener = tokio::net::TcpListener::bind(config.bind).await?;
+    let listener = tokio::net::TcpListener::bind(bind).await?;
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
