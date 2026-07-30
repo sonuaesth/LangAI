@@ -5,6 +5,7 @@ mod error;
 mod exercise;
 mod openai;
 mod secrets;
+mod sync;
 use sqlx::SqlitePool;
 use tauri::Manager;
 #[derive(Clone)]
@@ -47,7 +48,11 @@ pub fn run() {
             commands::list_topics,
             commands::exercise_languages,
             commands::exercise_topics,
-            commands::next_exercise
+            commands::next_exercise,
+            sync::connect_sync_account,
+            sync::sync_status,
+            sync::disconnect_sync_account,
+            sync::sync_now
         ])
         .run(tauri::generate_context!())
         .expect("error while running LangAI")

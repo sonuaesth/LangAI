@@ -39,6 +39,27 @@ struct SentencePayload {
     target_languages: Vec<String>,
     #[serde(default)]
     topics: Vec<String>,
+    #[serde(default)]
+    preparations: Vec<ImportedPreparation>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportedPreparation {
+    target_language: String,
+    version: i32,
+    model: String,
+    translation: String,
+    active: bool,
+    blocks: Vec<ImportedBlock>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ImportedBlock {
+    position: i32,
+    correct: String,
+    hint: Option<String>,
+    distractors: Vec<String>,
 }
 
 fn required_text(value: &str, label: &str, max: usize) -> Result<String, ApiError> {
@@ -176,6 +197,98 @@ async fn upsert_sentence(
         .bind(topic_id)
         .execute(&mut **tx)
         .await?;
+    }
+    for preparation in payload.preparations {
+        let target_language = required_text(&preparation.target_language, "Target language", 100)?;
+        let model = required_text(&preparation.model, "Model", 100)?;
+        let translation = required_text(&preparation.translation, "Translation", 1000)?;
+        if preparation.version < 1 || preparation.blocks.is_empty() || preparation.blocks.len() > 50
+        {
+            return Err(ApiError::InvalidInput(
+                "Invalid imported preparation".into(),
+            ));
+        }
+        let proposed_id = Uuid::new_v4();
+        let inserted = sqlx::query(
+            "INSERT INTO preparations(
+               id,user_id,sentence_id,version,target_language,model,translation
+             ) VALUES($1,$2,$3,$4,$5,$6,$7)
+             ON CONFLICT(user_id,sentence_id,target_language,version) DO NOTHING",
+        )
+        .bind(proposed_id)
+        .bind(user_id)
+        .bind(operation.entity_id)
+        .bind(preparation.version)
+        .bind(&target_language)
+        .bind(model)
+        .bind(translation)
+        .execute(&mut **tx)
+        .await?;
+        let preparation_id = if inserted.rows_affected() == 1 {
+            for block in preparation.blocks {
+                if block.position < 0
+                    || block.correct.trim().is_empty()
+                    || block.correct.chars().count() > 200
+                    || block.distractors.len() != 3
+                {
+                    return Err(ApiError::InvalidInput("Invalid imported block".into()));
+                }
+                let block_id = Uuid::new_v4();
+                sqlx::query(
+                    "INSERT INTO blocks(id,user_id,preparation_id,position,correct,hint)
+                     VALUES($1,$2,$3,$4,$5,$6)",
+                )
+                .bind(block_id)
+                .bind(user_id)
+                .bind(proposed_id)
+                .bind(block.position)
+                .bind(&block.correct)
+                .bind(&block.hint)
+                .execute(&mut **tx)
+                .await?;
+                for (text, is_correct) in std::iter::once((block.correct, true))
+                    .chain(block.distractors.into_iter().map(|text| (text, false)))
+                {
+                    let text = required_text(&text, "Option", 200)?;
+                    sqlx::query(
+                        "INSERT INTO options(id,user_id,block_id,text,is_correct)
+                         VALUES($1,$2,$3,$4,$5)",
+                    )
+                    .bind(Uuid::new_v4())
+                    .bind(user_id)
+                    .bind(block_id)
+                    .bind(text)
+                    .bind(is_correct)
+                    .execute(&mut **tx)
+                    .await?;
+                }
+            }
+            proposed_id
+        } else {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM preparations WHERE user_id=$1 AND sentence_id=$2
+                 AND target_language=$3 AND version=$4",
+            )
+            .bind(user_id)
+            .bind(operation.entity_id)
+            .bind(&target_language)
+            .bind(preparation.version)
+            .fetch_one(&mut **tx)
+            .await?
+        };
+        if preparation.active {
+            sqlx::query(
+                "UPDATE sentence_languages SET active_preparation_id=$1,status='ready',
+                 error=NULL,updated_at=now(),revision=revision+1
+                 WHERE user_id=$2 AND sentence_id=$3 AND target_language=$4",
+            )
+            .bind(preparation_id)
+            .bind(user_id)
+            .bind(operation.entity_id)
+            .bind(target_language)
+            .execute(&mut **tx)
+            .await?;
+        }
     }
     record_sentence_change(tx, user_id, operation.entity_id, "upsert", revision).await?;
     Ok(revision)
