@@ -7,6 +7,7 @@ mod openai;
 mod routes;
 mod secrets;
 mod state;
+mod sync;
 
 use config::Config;
 use sqlx::postgres::PgPoolOptions;

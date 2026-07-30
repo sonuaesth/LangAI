@@ -6,8 +6,8 @@ use axum::{
     Json,
 };
 use langai_contracts::{
-    CreateSentenceRequest, SentenceLanguageResponse, SentenceResponse, SettingsResponse,
-    UpdateSettingsRequest,
+    CreateSentenceRequest, ExerciseBlockResponse, ExerciseOptionResponse, PreparationResponse,
+    SentenceLanguageResponse, SentenceResponse, SettingsResponse, UpdateSettingsRequest,
 };
 use serde::Deserialize;
 use sqlx::{PgPool, Postgres, Transaction};
@@ -312,7 +312,7 @@ pub async fn delete_sentence(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn load_sentence(
+pub(crate) async fn load_sentence(
     database: &PgPool,
     user_id: Uuid,
     sentence_id: Uuid,
@@ -327,32 +327,105 @@ async fn load_sentence(
     .fetch_optional(database)
     .await?
     .ok_or(ApiError::NotFound)?;
-    let languages =
-        sqlx::query_as::<_, (String, String, Option<String>, Option<String>, bool, i64)>(
-            "SELECT target_language,status,error,translation_comment,
-             audio_object_key IS NOT NULL,revision
+    let language_rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            bool,
+            i64,
+            Option<Uuid>,
+        ),
+    >(
+        "SELECT target_language,status,error,translation_comment,
+             audio_object_key IS NOT NULL,revision,active_preparation_id
              FROM sentence_languages
              WHERE user_id=$1 AND sentence_id=$2 AND deleted_at IS NULL
              ORDER BY target_language",
-        )
-        .bind(user_id)
-        .bind(sentence_id)
-        .fetch_all(database)
-        .await?
-        .into_iter()
-        .map(
-            |(target_language, status, error, translation_comment, audio_available, revision)| {
-                SentenceLanguageResponse {
-                    target_language,
-                    status,
-                    error,
-                    translation_comment,
-                    audio_available,
-                    revision,
+    )
+    .bind(user_id)
+    .bind(sentence_id)
+    .fetch_all(database)
+    .await?;
+    let mut languages = Vec::with_capacity(language_rows.len());
+    for (
+        target_language,
+        status,
+        error,
+        translation_comment,
+        audio_available,
+        revision,
+        preparation_id,
+    ) in language_rows
+    {
+        let active_preparation = match preparation_id {
+            Some(preparation_id) => {
+                let (version, model, translation) = sqlx::query_as::<_, (i32, String, String)>(
+                    "SELECT version,model,translation FROM preparations
+                         WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL",
+                )
+                .bind(preparation_id)
+                .bind(user_id)
+                .fetch_optional(database)
+                .await?
+                .ok_or(ApiError::Internal)?;
+                let block_rows = sqlx::query_as::<_, (Uuid, i32, String, Option<String>)>(
+                    "SELECT id,position,correct,hint FROM blocks
+                     WHERE user_id=$1 AND preparation_id=$2 AND deleted_at IS NULL
+                     ORDER BY position",
+                )
+                .bind(user_id)
+                .bind(preparation_id)
+                .fetch_all(database)
+                .await?;
+                let mut blocks = Vec::with_capacity(block_rows.len());
+                for (id, position, correct, hint) in block_rows {
+                    let options = sqlx::query_as::<_, (Uuid, String, bool)>(
+                        "SELECT id,text,is_correct FROM options
+                         WHERE user_id=$1 AND block_id=$2 AND deleted_at IS NULL
+                         ORDER BY is_correct DESC,id",
+                    )
+                    .bind(user_id)
+                    .bind(id)
+                    .fetch_all(database)
+                    .await?
+                    .into_iter()
+                    .map(|(id, text, is_correct)| ExerciseOptionResponse {
+                        id,
+                        text,
+                        is_correct,
+                    })
+                    .collect();
+                    blocks.push(ExerciseBlockResponse {
+                        id,
+                        position,
+                        correct,
+                        hint,
+                        options,
+                    });
                 }
-            },
-        )
-        .collect();
+                Some(PreparationResponse {
+                    id: preparation_id,
+                    version,
+                    model,
+                    translation,
+                    blocks,
+                })
+            }
+            None => None,
+        };
+        languages.push(SentenceLanguageResponse {
+            target_language,
+            status,
+            error,
+            translation_comment,
+            audio_available,
+            revision,
+            active_preparation,
+        });
+    }
     let topics = sqlx::query_scalar::<_, String>(
         "SELECT t.name FROM topics t JOIN sentence_topics st
            ON st.user_id=t.user_id AND st.topic_id=t.id

@@ -5,7 +5,7 @@ use axum::{
 };
 use langai_contracts::HealthResponse;
 
-use crate::{audio, auth, domain, error::ApiError, openai, secrets, state::AppState};
+use crate::{audio, auth, domain, error::ApiError, openai, secrets, state::AppState, sync};
 
 pub fn router(state: AppState) -> Router {
     let max_audio_bytes = state.config.max_audio_bytes;
@@ -62,6 +62,8 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/provider-keys/{provider}",
             axum::routing::put(secrets::save_key).delete(secrets::delete_key),
         )
+        .route("/api/v1/sync/push", axum::routing::post(sync::push))
+        .route("/api/v1/sync/pull", get(sync::pull))
         .layer(DefaultBodyLimit::max(max_audio_bytes))
         .with_state(state)
 }

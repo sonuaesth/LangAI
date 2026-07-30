@@ -118,6 +118,35 @@ pub struct SentenceLanguageResponse {
     pub translation_comment: Option<String>,
     pub audio_available: bool,
     pub revision: i64,
+    pub active_preparation: Option<PreparationResponse>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparationResponse {
+    pub id: Uuid,
+    pub version: i32,
+    pub model: String,
+    pub translation: String,
+    pub blocks: Vec<ExerciseBlockResponse>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExerciseBlockResponse {
+    pub id: Uuid,
+    pub position: i32,
+    pub correct: String,
+    pub hint: Option<String>,
+    pub options: Vec<ExerciseOptionResponse>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExerciseOptionResponse {
+    pub id: Uuid,
+    pub text: String,
+    pub is_correct: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -165,6 +194,56 @@ pub struct AudioMetadataResponse {
     pub size: i64,
     pub mime: String,
     pub name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncPushRequest {
+    pub operations: Vec<SyncPushOperation>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncPushOperation {
+    pub operation_id: Uuid,
+    pub kind: String,
+    pub entity_id: Uuid,
+    pub base_revision: Option<i64>,
+    pub payload: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncOperationResult {
+    pub operation_id: Uuid,
+    pub entity_id: Uuid,
+    pub revision: i64,
+    pub replayed: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncPushResponse {
+    pub results: Vec<SyncOperationResult>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncChangeResponse {
+    pub sequence: i64,
+    pub entity_type: String,
+    pub entity_id: Uuid,
+    pub operation: String,
+    pub revision: i64,
+    pub payload: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncPullResponse {
+    pub cursor: i64,
+    pub has_more: bool,
+    pub changes: Vec<SyncChangeResponse>,
 }
 
 #[cfg(test)]
