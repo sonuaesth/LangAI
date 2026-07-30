@@ -51,6 +51,10 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(openai::prepare_sentence),
         )
         .route(
+            "/api/v1/sentences/{sentence_id}/translations",
+            axum::routing::post(domain::save_manual_translation),
+        )
+        .route(
             "/api/v1/sentences/{sentence_id}/audio",
             get(audio::download_audio)
                 .put(audio::upload_audio)

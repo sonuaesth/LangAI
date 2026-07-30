@@ -23,21 +23,21 @@ use crate::{
 const RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 
 #[derive(Debug, Deserialize)]
-struct Generated {
+pub(crate) struct Generated {
     #[serde(rename = "source_text")]
-    _source_text: String,
+    pub(crate) _source_text: String,
     #[serde(rename = "target_language")]
-    _target_language: String,
-    translation: String,
-    blocks: Vec<GeneratedBlock>,
+    pub(crate) _target_language: String,
+    pub(crate) translation: String,
+    pub(crate) blocks: Vec<GeneratedBlock>,
 }
 
 #[derive(Debug, Deserialize)]
-struct GeneratedBlock {
-    position: usize,
-    correct: String,
-    distractors: Vec<String>,
-    hint: Option<String>,
+pub(crate) struct GeneratedBlock {
+    pub(crate) position: usize,
+    pub(crate) correct: String,
+    pub(crate) distractors: Vec<String>,
+    pub(crate) hint: Option<String>,
 }
 
 fn norm(value: &str) -> String {
@@ -63,7 +63,11 @@ fn clean(value: &str) -> bool {
     !value.trim().is_empty() && !value.chars().any(char::is_control)
 }
 
-fn validate(generated: &Generated, _source: &str, _language: &str) -> Result<(), ApiError> {
+pub(crate) fn validate(
+    generated: &Generated,
+    _source: &str,
+    _language: &str,
+) -> Result<(), ApiError> {
     if !clean(&generated.translation) || generated.translation.len() > 1000 {
         return Err(ApiError::Provider("Invalid generated translation".into()));
     }
@@ -184,7 +188,7 @@ async fn generate(
     Err(ApiError::Provider("OpenAI request failed".into()))
 }
 
-async fn persist(
+pub(crate) async fn persist(
     tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     sentence_id: Uuid,

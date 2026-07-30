@@ -167,9 +167,11 @@ export const webApi = {
   async sentenceDetails(id: EntityId) {
     return details(await request<ServerSentence>(`/api/v1/sentences/${id}`));
   },
-  async saveManualTranslation(_id: EntityId, _translation: ManualTranslation) {
-    throw new Error("Ручное редактирование перевода для web ещё подключается");
-  },
+  saveManualTranslation: (id: EntityId, translation: ManualTranslation) =>
+    request<void>(`/api/v1/sentences/${id}/translations`, {
+      method: "POST",
+      body: JSON.stringify(translation),
+    }),
   async saveAudio(id: EntityId, targetLanguage: string, fileName: string, mimeType: string, bytes: number[]) {
     const data = new Uint8Array(bytes);
     const digest = await crypto.subtle.digest("SHA-256", data);

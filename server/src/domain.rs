@@ -7,7 +7,8 @@ use axum::{
 };
 use langai_contracts::{
     CreateSentenceRequest, ExerciseBlockResponse, ExerciseOptionResponse, PreparationResponse,
-    SentenceLanguageResponse, SentenceResponse, SettingsResponse, UpdateSettingsRequest,
+    SaveManualTranslationRequest, SentenceLanguageResponse, SentenceResponse, SettingsResponse,
+    UpdateSettingsRequest,
 };
 use serde::Deserialize;
 use sqlx::{PgPool, Postgres, Transaction};
@@ -306,6 +307,74 @@ pub async fn delete_sentence(
         sentence_id,
         "delete",
         revision,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn save_manual_translation(
+    State(state): State<AppState>,
+    Path(sentence_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<SaveManualTranslationRequest>,
+) -> Result<StatusCode, ApiError> {
+    let auth = authenticate_request(&state, &headers).await?;
+    require_mutation_auth(&state, &headers, &auth)?;
+    let target_language = required_text(&input.target_language, "Target language", 100)?;
+    let source = sqlx::query_scalar::<_, String>(
+        "SELECT source_text FROM sentences
+         WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL",
+    )
+    .bind(sentence_id)
+    .bind(auth.user_id)
+    .fetch_optional(&state.database)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+    let generated = crate::openai::Generated {
+        _source_text: source.clone(),
+        _target_language: target_language.clone(),
+        translation: input.translation.trim().to_owned(),
+        blocks: input
+            .blocks
+            .into_iter()
+            .enumerate()
+            .map(|(position, block)| crate::openai::GeneratedBlock {
+                position,
+                correct: block.correct.trim().to_owned(),
+                distractors: block
+                    .distractors
+                    .into_iter()
+                    .map(|value| value.trim().to_owned())
+                    .collect(),
+                hint: block
+                    .hint
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty()),
+            })
+            .collect(),
+    };
+    crate::openai::validate(&generated, &source, &target_language)
+        .map_err(|error| ApiError::InvalidInput(error.to_string()))?;
+    let mut tx = state.database.begin().await?;
+    sqlx::query(
+        "INSERT INTO sentence_languages(user_id,sentence_id,target_language,status)
+         VALUES($1,$2,$3,'unprepared')
+         ON CONFLICT(user_id,sentence_id,target_language) DO UPDATE SET
+           deleted_at=NULL,updated_at=now()",
+    )
+    .bind(auth.user_id)
+    .bind(sentence_id)
+    .bind(&target_language)
+    .execute(&mut *tx)
+    .await?;
+    crate::openai::persist(
+        &mut tx,
+        auth.user_id,
+        sentence_id,
+        &target_language,
+        "manual",
+        &generated,
     )
     .await?;
     tx.commit().await?;

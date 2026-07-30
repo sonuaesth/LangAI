@@ -191,6 +191,22 @@ pub struct PrepareSentenceRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SaveManualTranslationRequest {
+    pub target_language: String,
+    pub translation: String,
+    pub blocks: Vec<ManualTranslationBlockRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualTranslationBlockRequest {
+    pub correct: String,
+    pub distractors: Vec<String>,
+    pub hint: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GenerateAudioRequest {
     pub target_language: String,
 }
