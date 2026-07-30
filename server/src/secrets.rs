@@ -7,7 +7,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
-use langai_contracts::{ProviderKeyStatus, SaveProviderKeyRequest};
+use langai_contracts::{ProviderKeyStatus, SaveProviderKeyRequest, VoiceResponse};
 use rand_core::{OsRng, RngCore};
 use uuid::Uuid;
 
@@ -163,6 +163,128 @@ pub async fn delete_key(
     Ok(StatusCode::NO_CONTENT)
 }
 
+fn supported_openai_model(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    let supported = id.starts_with("gpt-5")
+        || id.starts_with("gpt-4.1")
+        || id.starts_with("gpt-4o")
+        || id.starts_with("o3")
+        || id.starts_with("o4");
+    supported
+        && ![
+            "audio",
+            "realtime",
+            "transcribe",
+            "tts",
+            "image",
+            "search",
+            "embedding",
+            "moderation",
+            "computer-use",
+            "codex",
+        ]
+        .iter()
+        .any(|marker| id.contains(marker))
+}
+
+async fn models_for_key(key: &str) -> Result<Vec<String>, ApiError> {
+    let response = reqwest::Client::new()
+        .get("https://api.openai.com/v1/models")
+        .bearer_auth(key)
+        .send()
+        .await
+        .map_err(|_| ApiError::Provider("OpenAI request failed".into()))?;
+    if !response.status().is_success() {
+        return Err(ApiError::Provider(format!(
+            "OpenAI key verification failed with status {}",
+            response.status()
+        )));
+    }
+    let value: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|_| ApiError::Provider("Invalid OpenAI response".into()))?;
+    let mut models = value["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item["id"].as_str())
+        .filter(|id| supported_openai_model(id))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    models.sort();
+    models.dedup();
+    Ok(models)
+}
+
+async fn voices_for_key(key: &str) -> Result<Vec<VoiceResponse>, ApiError> {
+    let response = reqwest::Client::new()
+        .get("https://api.elevenlabs.io/v2/voices?page_size=100&sort=name&sort_direction=asc")
+        .header("xi-api-key", key)
+        .send()
+        .await
+        .map_err(|_| ApiError::Provider("ElevenLabs request failed".into()))?;
+    if !response.status().is_success() {
+        return Err(ApiError::Provider(format!(
+            "ElevenLabs key verification failed with status {}",
+            response.status()
+        )));
+    }
+    let value: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|_| ApiError::Provider("Invalid ElevenLabs response".into()))?;
+    Ok(value["voices"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|voice| {
+            Some(VoiceResponse {
+                voice_id: voice["voice_id"].as_str()?.to_owned(),
+                name: voice["name"].as_str()?.to_owned(),
+            })
+        })
+        .collect())
+}
+
+pub async fn openai_models(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<String>>, ApiError> {
+    let auth = authenticate_request(&state, &headers).await?;
+    let key = decrypt_key(&state, auth.user_id, "openai").await?;
+    Ok(Json(models_for_key(&key).await?))
+}
+
+pub async fn verify_openai(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<SaveProviderKeyRequest>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    let auth = authenticate_request(&state, &headers).await?;
+    require_mutation_auth(&state, &headers, &auth)?;
+    Ok(Json(models_for_key(input.api_key.trim()).await?))
+}
+
+pub async fn elevenlabs_voices(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<VoiceResponse>>, ApiError> {
+    let auth = authenticate_request(&state, &headers).await?;
+    let key = decrypt_key(&state, auth.user_id, "elevenlabs").await?;
+    Ok(Json(voices_for_key(&key).await?))
+}
+
+pub async fn verify_elevenlabs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<SaveProviderKeyRequest>,
+) -> Result<Json<Vec<VoiceResponse>>, ApiError> {
+    let auth = authenticate_request(&state, &headers).await?;
+    require_mutation_auth(&state, &headers, &auth)?;
+    Ok(Json(voices_for_key(input.api_key.trim()).await?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,5 +297,12 @@ mod tests {
         let second = encrypt(&key, user_id, "openai", b"secret").unwrap();
         assert_ne!(first.0, second.0);
         assert_ne!(first.1, second.1);
+    }
+
+    #[test]
+    fn filters_non_exercise_openai_models() {
+        assert!(supported_openai_model("gpt-5-mini"));
+        assert!(!supported_openai_model("gpt-4o-realtime-preview"));
+        assert!(!supported_openai_model("text-embedding-3-small"));
     }
 }

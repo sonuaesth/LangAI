@@ -14,6 +14,7 @@ pub struct Config {
     pub secrets_master_key: [u8; 32],
     pub audio_storage_path: PathBuf,
     pub max_audio_bytes: usize,
+    pub web_root: PathBuf,
 }
 
 impl Config {
@@ -61,6 +62,9 @@ impl Config {
         if max_audio_bytes == 0 || max_audio_bytes > 100 * 1024 * 1024 {
             anyhow::bail!("MAX_AUDIO_BYTES must be between 1 and 104857600");
         }
+        let web_root = std::env::var("WEB_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("./out"));
         Ok(Self {
             bind: SocketAddr::from_str(&bind)
                 .map_err(|error| anyhow::anyhow!("invalid LANGAI_BIND: {error}"))?,
@@ -73,6 +77,7 @@ impl Config {
             secrets_master_key,
             audio_storage_path,
             max_audio_bytes,
+            web_root,
         })
     }
 }

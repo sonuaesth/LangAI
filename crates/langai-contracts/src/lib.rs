@@ -175,6 +175,13 @@ pub struct ProviderKeyStatus {
     pub key_hint: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceResponse {
+    pub voice_id: String,
+    pub name: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrepareSentenceRequest {

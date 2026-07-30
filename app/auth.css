@@ -1,0 +1,21 @@
+.authShell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--paper);
+}
+
+.authCard {
+  width: min(430px, 100%);
+  display: grid;
+  gap: 18px;
+}
+
+.authCard .brand {
+  color: var(--ink);
+}
+
+.authCard button {
+  width: 100%;
+}

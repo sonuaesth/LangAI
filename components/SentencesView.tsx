@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/tauri";
 import { LANGUAGES } from "@/lib/languages";
-import type { Sentence } from "@/lib/types";
+import type { EntityId, Sentence } from "@/lib/types";
 import { SentenceEditor } from "@/components/SentenceEditor";
 
 const labels = { unprepared: "Не готово", queued: "В очереди", generating: "Генерация", ready: "Готово", failed: "Ошибка" };
@@ -17,9 +17,9 @@ export function SentencesView() {
   const [topic, setTopic] = useState("");
   const [filterTopic, setFilterTopic] = useState("");
   const [topics, setTopics] = useState<string[]>([]);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [selected, setSelected] = useState<Set<EntityId>>(new Set());
   const [error, setError] = useState("");
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<EntityId | null>(null);
 
   const load = () => Promise.all([
     api.listSentences(filterLanguage || undefined, targetLanguage, filterTopic || undefined),
@@ -40,7 +40,7 @@ export function SentencesView() {
     catch (reason) { setError(String(reason)); }
   }
 
-  async function prepare(ids?: number[]) {
+  async function prepare(ids?: EntityId[]) {
     try { await api.prepare(ids, targetLanguage, translationComment, topic); await load(); }
     catch (reason) { setError(String(reason)); }
   }

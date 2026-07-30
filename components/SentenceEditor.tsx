@@ -3,11 +3,11 @@
 import { useEffect, useState } from "react";
 import { LANGUAGES } from "@/lib/languages";
 import { api } from "@/lib/tauri";
-import type { ManualBlock, ManualTranslation, SentenceDetails } from "@/lib/types";
+import type { EntityId, ManualBlock, ManualTranslation, SentenceDetails } from "@/lib/types";
 
 const emptyBlock = (): ManualBlock => ({ correct: "", distractors: ["", "", ""], hint: "" });
 
-export function SentenceEditor({ sentenceId, onClose, onSaved }: { sentenceId:number; onClose:()=>void; onSaved:()=>void }) {
+export function SentenceEditor({ sentenceId, onClose, onSaved }: { sentenceId:EntityId; onClose:()=>void; onSaved:()=>void }) {
   const [details, setDetails] = useState<SentenceDetails | null>(null);
   const [draft, setDraft] = useState<ManualTranslation>({ targetLanguage: LANGUAGES[0], translation: "", blocks: [emptyBlock()] });
   const [error, setError] = useState("");
