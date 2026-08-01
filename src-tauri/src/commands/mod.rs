@@ -295,6 +295,15 @@ pub async fn generate_sentence_audio(
     app: AppHandle,
     s: State<'_, AppState>,
 ) -> Result<()> {
+    generate_sentence_audio_inner(sentence_id, &target_language, &app, &s).await
+}
+
+async fn generate_sentence_audio_inner(
+    sentence_id: i64,
+    target_language: &str,
+    app: &AppHandle,
+    s: &AppState,
+) -> Result<()> {
     let key = secrets::get_elevenlabs()?
         .ok_or_else(|| AppError::Input("Configure an ElevenLabs API key first".into()))?;
     let settings = settings_inner(&s).await?;
@@ -305,7 +314,7 @@ pub async fn generate_sentence_audio(
         .elevenlabs_voice_name
         .unwrap_or_else(|| "ElevenLabs".into());
     let row = sqlx::query("SELECT p.translation,sl.audio_file FROM sentence_languages sl JOIN preparations p ON p.id=sl.active_preparation_id WHERE sl.sentence_id=? AND sl.target_language=? AND sl.status='ready'")
-        .bind(sentence_id).bind(&target_language).fetch_optional(&s.db).await?
+        .bind(sentence_id).bind(target_language).fetch_optional(&s.db).await?
         .ok_or_else(|| AppError::Input("Prepare this translation before generating audio".into()))?;
     let text: String = row.get(0);
     let previous: Option<String> = row.get(1);
@@ -638,6 +647,7 @@ pub async fn prepare_sentences(
     }
     validate_topic(&topic)?;
     let cfg = settings_inner(&s).await?;
+    let auto_generate_audio = cfg.elevenlabs_key_configured && cfg.elevenlabs_voice_id.is_some();
     let has_selected_ids = ids.is_some();
     let rows: Vec<(i64, String, String, Option<String>)> = if let Some(ids) = ids {
         let mut out = vec![];
@@ -687,6 +697,7 @@ pub async fn prepare_sentences(
             let app = app.clone();
             let key = key.clone();
             let model = cfg.model.clone();
+            let auto_generate_audio = auto_generate_audio;
             async move {
                 sqlx::query("UPDATE sentence_languages SET status='generating' WHERE sentence_id=? AND target_language=?")
                     .bind(id)
@@ -706,7 +717,10 @@ pub async fn prepare_sentences(
                 )
                 .ok();
                 let result = match openai::generate(&key, &model, &lang, &text, comment.as_deref()).await {
-                    Ok(g) => persist(&state, id, &g, &model, &lang).await,
+                    Ok(g) => match persist(&state, id, &g, &model, &lang).await {
+                        Ok(()) if auto_generate_audio => generate_sentence_audio_inner(id, &lang, &app, &state).await,
+                        result => result,
+                    },
                     Err(e) => Err(e),
                 };
                 match result {

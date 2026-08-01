@@ -21,10 +21,8 @@ function reducer(state: State, action: Action): State {
     return initial;
   }
   if (action.type === "hint") return { ...state, hintVisible: !state.hintVisible };
-  const firstEmpty = Array.from({ length: action.total }, (_, position) => position)
-    .find(position => state.answers[position] === undefined);
-  if (firstEmpty === undefined) return state;
-  const answers = { ...state.answers, [firstEmpty]: action.text };
+  if (state.answers[action.sourcePosition] !== undefined) return state;
+  const answers = { ...state.answers, [action.sourcePosition]: action.text };
   const usedBlocks = [...state.usedBlocks, action.sourcePosition];
   const filled = Object.keys(answers).length === action.total;
   return {
@@ -102,12 +100,8 @@ export function ExerciseView() {
 
   function choose(option: Option, sourcePosition: number) {
     const isLastEmpty = solved === lesson.blocks.length - 1;
-    const firstEmpty = Array.from({ length: lesson.blocks.length }, (_, position) => position)
-      .find(position => state.answers[position] === undefined);
     const expected = lesson.blocks.map(block => block.correct);
-    const completedAnswers = firstEmpty === undefined
-      ? state.answers
-      : { ...state.answers, [firstEmpty]: option.text };
+    const completedAnswers = { ...state.answers, [sourcePosition]: option.text };
     const shouldReset = isLastEmpty && attemptHasErrors(completedAnswers, expected);
     dispatch({
       type: "answer",
@@ -117,6 +111,9 @@ export function ExerciseView() {
       expected,
     });
     if (shouldReset) setTimeout(() => dispatch({ type: "clearWrong" }), 650);
+    if (isLastEmpty && !shouldReset && lesson.audioAvailable) {
+      void playAnswerAudio();
+    }
   }
 
   async function playAnswerAudio() {
@@ -155,7 +152,7 @@ export function ExerciseView() {
         {currentHint.hint || `Начинается с «${currentHint.correct.slice(0, 1)}», ${currentHint.correct.length} символов.`}
       </div>}
       <div className="choiceColumns">
-        {active.map(block => <div className="choiceColumn" key={block.id}>
+        {active.map(block => <div className={`choiceColumn ${block.position % 2 === 0 ? "choiceColumnLeft" : "choiceColumnRight"}`} key={block.id}>
           {order[block.position]?.map(option => <button
             key={option.id}
             className="wordChoice"

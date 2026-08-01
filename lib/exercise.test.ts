@@ -23,8 +23,13 @@ describe("deferred attempt validation", () => {
 });
 
 describe("single-use option groups", () => {
-  it("does not display a group again after an option was selected from it", () => {
-    expect(availableBlockPositions(4, [1])).toEqual([0, 2]);
+  it("advances only the column whose option was selected", () => {
+    expect(availableBlockPositions(4, [1])).toEqual([0, 3]);
+    expect(availableBlockPositions(4, [0])).toEqual([2, 1]);
+  });
+
+  it("keeps the remaining group in its original column", () => {
+    expect(availableBlockPositions(4, [0, 1, 2])).toEqual([3]);
   });
 });
 

@@ -217,10 +217,20 @@ export const webApi = {
     const selected = ids?.length ? ids : (await sentences(targetLanguage)).filter(sentence =>
       sentence.languages.some(language => language.targetLanguage === targetLanguage && ["unprepared", "failed"].includes(language.status)),
     ).map(sentence => sentence.id);
-    await Promise.all(selected.map(id => request(`/api/v1/sentences/${id}/prepare`, {
-      method: "POST",
-      body: JSON.stringify({ targetLanguage, translationComment: comment || null }),
-    })));
+    const current = await settings();
+    const autoGenerateAudio = current.elevenlabsKeyConfigured && Boolean(current.elevenlabsVoiceId);
+    await Promise.all(selected.map(async id => {
+      await request(`/api/v1/sentences/${id}/prepare`, {
+        method: "POST",
+        body: JSON.stringify({ targetLanguage, translationComment: comment || null }),
+      });
+      if (autoGenerateAudio) {
+        await request(`/api/v1/sentences/${id}/audio/generate`, {
+          method: "POST",
+          body: JSON.stringify({ targetLanguage }),
+        });
+      }
+    }));
   },
   settings,
   async saveSettings(model: string) {

@@ -7,6 +7,7 @@ import type { EntityId, Sentence } from "@/lib/types";
 import { SentenceEditor } from "@/components/SentenceEditor";
 
 const labels = { unprepared: "Не готово", queued: "В очереди", generating: "Генерация", ready: "Готово", failed: "Ошибка" };
+const TARGET_LANGUAGE_STORAGE_KEY = "langai.targetLanguage";
 
 export function SentencesView() {
   const [rows, setRows] = useState<Sentence[]>([]);
@@ -20,6 +21,13 @@ export function SentencesView() {
   const [selected, setSelected] = useState<Set<EntityId>>(new Set());
   const [error, setError] = useState("");
   const [editingId, setEditingId] = useState<EntityId | null>(null);
+
+  useEffect(() => {
+    const savedLanguage = window.localStorage.getItem(TARGET_LANGUAGE_STORAGE_KEY);
+    if (savedLanguage && LANGUAGES.some(language => language === savedLanguage)) {
+      setTargetLanguage(savedLanguage);
+    }
+  }, []);
 
   const load = () => Promise.all([
     api.listSentences(filterLanguage || undefined, targetLanguage, filterTopic || undefined),
@@ -45,9 +53,14 @@ export function SentencesView() {
     catch (reason) { setError(String(reason)); }
   }
 
+  function selectTargetLanguage(language: string) {
+    setTargetLanguage(language);
+    window.localStorage.setItem(TARGET_LANGUAGE_STORAGE_KEY, language);
+  }
+
   return <>
     <header><div><p className="eyebrow">Библиотека</p><h1>Предложения</h1><p>Предложения каждого языка хранятся и практикуются отдельно.</p></div></header>
-    <div className="sentenceLanguage"><label><span>Перевести на</span><select value={targetLanguage} onChange={event => setTargetLanguage(event.target.value)}>{LANGUAGES.map(item => <option value={item} key={item}>{item}</option>)}</select></label><label><span>Тема для подготовки</span><input list="topic-options" value={topic} maxLength={100} onChange={event => setTopic(event.target.value)} placeholder="Например, Отпуск"/><datalist id="topic-options">{topics.map(item => <option value={item} key={item}/>)}</datalist></label><label><span>Фильтр по языку</span><select value={filterLanguage} onChange={event => setFilterLanguage(event.target.value)}><option value="">Все языки</option>{LANGUAGES.map(item => <option value={item} key={item}>{item}</option>)}</select></label><label><span>Фильтр по теме</span><select value={filterTopic} onChange={event => setFilterTopic(event.target.value)}><option value="">Все темы</option>{topics.map(item => <option value={item} key={item}>{item}</option>)}</select></label></div>
+    <div className="sentenceLanguage"><label><span>Перевести на</span><select value={targetLanguage} onChange={event => selectTargetLanguage(event.target.value)}>{LANGUAGES.map(item => <option value={item} key={item}>{item}</option>)}</select></label><label><span>Тема для подготовки</span><input list="topic-options" value={topic} maxLength={100} onChange={event => setTopic(event.target.value)} placeholder="Например, Отпуск"/><datalist id="topic-options">{topics.map(item => <option value={item} key={item}/>)}</datalist></label><label><span>Фильтр по языку</span><select value={filterLanguage} onChange={event => setFilterLanguage(event.target.value)}><option value="">Все языки</option>{LANGUAGES.map(item => <option value={item} key={item}>{item}</option>)}</select></label><label><span>Фильтр по теме</span><select value={filterTopic} onChange={event => setFilterTopic(event.target.value)}><option value="">Все темы</option>{topics.map(item => <option value={item} key={item}>{item}</option>)}</select></label></div>
     <div className="card composer translationComposer"><div className="composerFields"><label><span>Предложения</span><textarea value={text} onChange={event => setText(event.target.value)} placeholder={"Я рано заснул в Италии.\nЗавтра мы идём в музей."}/></label><label><span>Комментарий к переводу <small>необязательно</small></span><textarea className="commentInput" maxLength={1000} value={translationComment} onChange={event => setTranslationComment(event.target.value)} placeholder="Например: переведи разговорно; предлоги выделяй отдельными блоками; используй британский английский…"/></label></div><button className="primary" onClick={add}>Добавить</button></div>
     {error && <div className="error">{error}</div>}
     <div className="toolbar"><label><input type="checkbox" checked={rows.length > 0 && selected.size === rows.length} onChange={event => setSelected(event.target.checked ? new Set(rows.map(row => row.id)) : new Set())}/> Выбрать все</label><span/><button onClick={() => prepare([...selected])} disabled={!selected.size}>Подготовить выбранные</button><button onClick={() => prepare()}>Подготовить все новые</button><button className="danger" disabled={!selected.size} onClick={async () => { await api.deleteSentences([...selected]); setSelected(new Set()); await load(); }}>Удалить</button></div>
