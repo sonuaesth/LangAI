@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BookOpenCheck, ListPlus, Settings as SettingsIcon } from "lucide-react";
+import { BookOpenCheck, ListPlus, LogOut, Settings as SettingsIcon } from "lucide-react";
 import { AuthGate } from "@/components/AuthGate";
 import { ExerciseView } from "@/components/ExerciseView";
 import { SentencesView } from "@/components/SentencesView";
 import { SettingsView } from "@/components/SettingsView";
 import { api, isDesktopApp } from "@/lib/tauri";
+import { webAuth } from "@/lib/web";
 
 type Tab = "exercise" | "sentences" | "settings";
 
@@ -26,10 +27,21 @@ export default function Home() {
     ["sentences", "Предложения", ListPlus],
     ["settings", "Настройки", SettingsIcon],
   ] as const;
+
+  async function exit() {
+    if (isDesktopApp()) {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().close();
+      return;
+    }
+    await webAuth.logout();
+    window.location.reload();
+  }
+
   return <AuthGate><main className="shell">
     <aside>
       <div className="brand"><span>LA</span><div>LangAI<small>переводы в ритме</small></div></div>
-      <nav>{items.map(([id, label, Icon]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}><Icon size={19}/>{label}</button>)}</nav>
+      <nav>{items.map(([id, label, Icon]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}><Icon size={19}/>{label}</button>)}<button className="exitAction" onClick={() => void exit()}><LogOut size={19}/>Выйти</button></nav>
       <div className="offline">● LangAI</div>
     </aside>
     <section className="content">{tab === "exercise" ? <ExerciseView/> : tab === "sentences" ? <SentencesView/> : <SettingsView/>}</section>

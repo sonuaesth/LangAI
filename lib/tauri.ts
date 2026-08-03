@@ -75,10 +75,10 @@ export const api = {
     select(() => call<string[]>("exercise_languages"), () => webApi.exerciseLanguages()),
   exerciseTopics: (targetLanguage: string) =>
     select(() => call<string[]>("exercise_topics", { targetLanguage }), () => webApi.exerciseTopics(targetLanguage)),
-  nextExercise: (lastId?: EntityId, targetLanguage?: string, topic?: string) =>
+  nextExercise: (lastId?: EntityId, targetLanguage?: string, topic?: string, shuffle = false) =>
     select(
-      () => call<Exercise | null>("next_exercise", { lastId: lastId ?? null, targetLanguage: targetLanguage ?? null, topic: topic ?? null }),
-      () => webApi.nextExercise(lastId, targetLanguage, topic),
+      () => call<Exercise | null>("next_exercise", { lastId: lastId ?? null, targetLanguage: targetLanguage ?? null, topic: topic ?? null, shuffle }),
+      () => webApi.nextExercise(lastId, targetLanguage, topic, shuffle),
     ),
   onProgress: (handler: (progress: Progress) => void): Promise<UnlistenFn> =>
     isDesktop()

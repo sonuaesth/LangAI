@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useReducer, useState } from "react";
-import { Lightbulb, RotateCcw, Volume2 } from "lucide-react";
+import { Lightbulb, RotateCcw, Shuffle, Volume2 } from "lucide-react";
 import { api } from "@/lib/tauri";
 import type { Exercise, Option } from "@/lib/types";
 import { attemptHasErrors, availableBlockPositions, wrongAnswerPositions } from "@/lib/exercise";
@@ -11,12 +11,14 @@ type Action =
   | { type: "answer"; text: string; sourcePosition: number; total: number; expected: string[] }
   | { type: "clearWrong" }
   | { type: "hint" }
+  | { type: "restore"; state: State }
   | { type: "reset" };
 
 const initial: State = { answers: {}, usedBlocks: [], wrongPositions: [], hintVisible: false };
 
 function reducer(state: State, action: Action): State {
   if (action.type === "reset") return initial;
+  if (action.type === "restore") return action.state;
   if (action.type === "clearWrong") {
     return initial;
   }
@@ -49,14 +51,16 @@ export function ExerciseView() {
   const [language, setLanguage] = useState("");
   const [topics, setTopics] = useState<string[]>([]);
   const [topic, setTopic] = useState("");
+  const [shuffle, setShuffle] = useState(false);
+  const [beforeShuffle, setBeforeShuffle] = useState<{ exercise: Exercise; state: State; order: Record<number, Option[]> } | null>(null);
   const [state, dispatch] = useReducer(reducer, initial);
   const [error, setError] = useState("");
   const [audioBusy, setAudioBusy] = useState(false);
 
-  const load = useCallback(async (selectedLanguage = language, lastId = exercise?.sentenceId, selectedTopic = topic) => {
+  const load = useCallback(async (selectedLanguage = language, lastId = exercise?.sentenceId, selectedTopic = topic, randomOrder = shuffle) => {
     try {
       if (!selectedLanguage) return;
-      const next = await api.nextExercise(lastId, selectedLanguage, selectedTopic || undefined);
+      const next = await api.nextExercise(lastId, selectedLanguage, selectedTopic || undefined, randomOrder);
       setExercise(next);
       dispatch({ type: "reset" });
       if (next) {
@@ -65,13 +69,40 @@ export function ExerciseView() {
     } catch (reason) {
       setError(String(reason));
     }
-  }, [exercise?.sentenceId, language, topic]);
+  }, [exercise?.sentenceId, language, topic, shuffle]);
 
   async function changeLanguage(value: string) {
     setLanguage(value);
     setTopic("");
+    setShuffle(false);
+    setBeforeShuffle(null);
     try { setTopics(await api.exerciseTopics(value)); } catch (reason) { setError(String(reason)); }
     await load(value, undefined, "");
+  }
+
+  function changeTopic(value: string) {
+    setTopic(value);
+    setShuffle(false);
+    setBeforeShuffle(null);
+    void load(language, undefined, value, false);
+  }
+
+  function toggleShuffle() {
+    if (!shuffle) {
+      if (exercise) setBeforeShuffle({ exercise, state, order });
+      setShuffle(true);
+      void load(language, undefined, topic, true);
+      return;
+    }
+    setShuffle(false);
+    if (beforeShuffle) {
+      setExercise(beforeShuffle.exercise);
+      setOrder(beforeShuffle.order);
+      dispatch({ type: "restore", state: beforeShuffle.state });
+      setBeforeShuffle(null);
+    } else {
+      void load(language, undefined, topic, false);
+    }
   }
 
   useEffect(() => {
@@ -88,7 +119,7 @@ export function ExerciseView() {
 
   if (error) return <div className="error">{error}</div>;
   if (!exercise) {
-    return <div className="practiceEmpty"><label><span>Язык практики</span><select value={language} disabled={!languages.length} onChange={event => void changeLanguage(event.target.value)}>{languages.map(item => <option value={item} key={item}>{item}</option>)}</select></label><label><span>Тема</span><select value={topic} onChange={event => { const value = event.target.value; setTopic(value); void load(language, undefined, value); }}><option value="">Все темы</option>{topics.map(item => <option value={item} key={item}>{item}</option>)}</select></label><div className="empty heroEmpty">{languages.length ? `Для выбранных языка и темы нет доступных предложений.` : "Нет подготовленных предложений. Подготовьте их в разделе «Предложения»."}</div></div>;
+    return <div className="practiceEmpty"><label><span>Язык практики</span><select value={language} disabled={!languages.length} onChange={event => void changeLanguage(event.target.value)}>{languages.map(item => <option value={item} key={item}>{item}</option>)}</select></label><label><span>Тема</span><select value={topic} onChange={event => changeTopic(event.target.value)}><option value="">Все темы</option>{topics.map(item => <option value={item} key={item}>{item}</option>)}</select></label><div className="empty heroEmpty">{languages.length ? `Для выбранных языка и темы нет доступных предложений.` : "Нет подготовленных предложений. Подготовьте их в разделе «Предложения»."}</div></div>;
   }
 
   const lesson = exercise;
@@ -132,7 +163,7 @@ export function ExerciseView() {
 
   return <div className="lesson">
     <div className="lessonTop">
-      <div><span className="lessonKicker">Упражнение</span><strong>Соберите перевод</strong><select className="practiceLanguage" value={language} onChange={event => void changeLanguage(event.target.value)}>{languages.map(item => <option value={item} key={item}>{item}</option>)}</select><select className="practiceLanguage" value={topic} onChange={event => { const value = event.target.value; setTopic(value); void load(language, undefined, value); }}><option value="">Все темы</option>{topics.map(item => <option value={item} key={item}>{item}</option>)}</select></div>
+      <div><span className="lessonKicker">Упражнение</span><strong>Соберите перевод</strong><select className="practiceLanguage" value={language} onChange={event => void changeLanguage(event.target.value)}>{languages.map(item => <option value={item} key={item}>{item}</option>)}</select><select className="practiceLanguage" value={topic} onChange={event => changeTopic(event.target.value)}><option value="">Все темы</option>{topics.map(item => <option value={item} key={item}>{item}</option>)}</select><button className={`practiceShuffle ${shuffle ? "active" : ""}`} onClick={toggleShuffle}><Shuffle size={17}/>Перемешать</button></div>
       <div className="lessonProgress">{solved} / {exercise.blocks.length}</div>
     </div>
 

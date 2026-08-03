@@ -821,10 +821,11 @@ pub async fn next_exercise(
     last_id: Option<i64>,
     target_language: Option<String>,
     topic: Option<String>,
+    shuffle: Option<bool>,
     s: State<'_, AppState>,
 ) -> Result<Option<Exercise>> {
     let rows = sqlx::query(
-        "SELECT sl.sentence_id FROM sentence_languages sl WHERE sl.status='ready' AND sl.active_preparation_id IS NOT NULL AND (? IS NULL OR sl.target_language=?) AND (? IS NULL OR EXISTS(SELECT 1 FROM sentence_topics st JOIN topics t ON t.id=st.topic_id WHERE st.sentence_id=sl.sentence_id AND t.name=? COLLATE NOCASE))",
+        "SELECT sl.sentence_id FROM sentence_languages sl JOIN sentences s ON s.id=sl.sentence_id WHERE sl.status='ready' AND sl.active_preparation_id IS NOT NULL AND (? IS NULL OR sl.target_language=?) AND (? IS NULL OR EXISTS(SELECT 1 FROM sentence_topics st JOIN topics t ON t.id=st.topic_id WHERE st.sentence_id=sl.sentence_id AND t.name=? COLLATE NOCASE)) ORDER BY s.created_at DESC,s.id DESC",
     )
     .bind(&target_language)
     .bind(&target_language)
@@ -832,7 +833,12 @@ pub async fn next_exercise(
     .bind(&topic)
     .fetch_all(&s.db)
     .await?;
-    let ids = crate::exercise::next_cycle(rows.iter().map(|r| r.get(0)).collect(), last_id);
+    let ordered_ids = rows.iter().map(|r| r.get(0)).collect();
+    let ids = if shuffle.unwrap_or(false) {
+        crate::exercise::next_cycle(ordered_ids, last_id)
+    } else {
+        crate::exercise::next_chronological(ordered_ids, last_id)
+    };
     let Some(id) = ids.first() else {
         return Ok(None);
     };

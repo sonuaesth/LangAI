@@ -62,8 +62,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-function summary(sentence: ServerSentence): Sentence {
-  const selected = sentence.languages[0];
+function summary(sentence: ServerSentence, targetLanguage?: string): Sentence {
+  const selected = targetLanguage
+    ? sentence.languages.find(language => language.targetLanguage === targetLanguage)
+    : sentence.languages[0];
   return {
     id: sentence.id,
     sourceText: sentence.sourceText,
@@ -148,8 +150,8 @@ async function settings(): Promise<Settings> {
 }
 
 export const webApi = {
-  async listSentences(filterLanguage?: string, _targetLanguage?: string, filterTopic?: string) {
-    return (await sentences(filterLanguage, filterTopic)).map(summary);
+  async listSentences(filterLanguage?: string, targetLanguage?: string, filterTopic?: string) {
+    return (await sentences(filterLanguage, filterTopic)).map(sentence => summary(sentence, targetLanguage));
   },
   async addSentences(texts: string[], targetLanguage: string, _comment?: string, topic?: string) {
     for (const sourceText of texts) {
@@ -162,7 +164,7 @@ export const webApi = {
         }),
       });
     }
-    return (await sentences()).map(summary);
+    return (await sentences()).map(sentence => summary(sentence, targetLanguage));
   },
   async sentenceDetails(id: EntityId) {
     return details(await request<ServerSentence>(`/api/v1/sentences/${id}`));
@@ -265,10 +267,17 @@ export const webApi = {
       sentence.languages.some(language => language.targetLanguage === targetLanguage && language.status === "ready"),
     ).flatMap(sentence => sentence.topics))].sort();
   },
-  async nextExercise(lastId?: EntityId, targetLanguage?: string, topic?: string) {
+  async nextExercise(lastId?: EntityId, targetLanguage?: string, topic?: string, shuffle = false) {
     if (!targetLanguage) return null;
     const available = (await sentences(targetLanguage, topic)).filter(sentence => exercise(sentence, targetLanguage));
-    const next = available.find(sentence => sentence.id !== lastId) ?? available[0];
+    let next: ServerSentence | undefined;
+    if (shuffle) {
+      const candidates = available.filter(sentence => sentence.id !== lastId);
+      next = candidates[Math.floor(Math.random() * candidates.length)] ?? available[0];
+    } else {
+      const current = available.findIndex(sentence => sentence.id === lastId);
+      next = available[current >= 0 ? (current + 1) % available.length : 0];
+    }
     return next ? exercise(next, targetLanguage) : null;
   },
   onProgress: async (_handler: unknown) => () => undefined,

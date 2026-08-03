@@ -242,7 +242,7 @@ pub async fn list_sentences(
              WHERE st.user_id=s.user_id AND st.sentence_id=s.id
              AND lower(t.name)=lower($3) AND st.deleted_at IS NULL AND t.deleted_at IS NULL
          ))
-         ORDER BY s.created_at DESC",
+         ORDER BY s.created_at DESC,s.sync_order DESC,s.id",
     )
     .bind(auth.user_id)
     .bind(language)

@@ -36,6 +36,8 @@ pub struct PullQuery {
 #[serde(rename_all = "camelCase")]
 struct SentencePayload {
     source_text: String,
+    created_at: Option<String>,
+    created_order: Option<i64>,
     target_languages: Vec<String>,
     #[serde(default)]
     topics: Vec<String>,
@@ -125,8 +127,10 @@ async fn upsert_sentence(
     }
     let topics = unique_texts(payload.topics, "Topic", 100)?;
     let revision = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO sentences(id,user_id,source_text) VALUES($1,$2,$3)
+        "INSERT INTO sentences(id,user_id,source_text,created_at,sync_order)
+         VALUES($1,$2,$3,COALESCE($4::timestamptz,now()),COALESCE($5,0))
          ON CONFLICT(id) DO UPDATE SET source_text=excluded.source_text,deleted_at=NULL,
+           created_at=excluded.created_at,sync_order=excluded.sync_order,
            updated_at=now(),revision=sentences.revision+1
          WHERE sentences.user_id=excluded.user_id
          RETURNING revision",
@@ -134,6 +138,8 @@ async fn upsert_sentence(
     .bind(operation.entity_id)
     .bind(user_id)
     .bind(source)
+    .bind(payload.created_at)
+    .bind(payload.created_order)
     .fetch_optional(&mut **tx)
     .await?
     .ok_or(ApiError::Forbidden)?;

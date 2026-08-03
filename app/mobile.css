@@ -29,7 +29,7 @@
     height: 61px;
     margin: 0;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 5px;
   }
 
@@ -43,6 +43,10 @@
     font-size: 11px;
     line-height: 1.1;
     text-align: center;
+  }
+
+  aside nav button.exitAction {
+    margin-top: 0;
   }
 
   aside nav button svg {

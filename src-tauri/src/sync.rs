@@ -208,7 +208,7 @@ async fn enqueue_initial_snapshot(state: &AppState) -> Result<()> {
     .execute(&mut *tx)
     .await?;
 
-    let sentences = sqlx::query("SELECT id,source_text FROM sentences ORDER BY id")
+    let sentences = sqlx::query("SELECT id,source_text,created_at FROM sentences ORDER BY id")
         .fetch_all(&mut *tx)
         .await?;
     for sentence in sentences {
@@ -285,6 +285,8 @@ async fn enqueue_initial_snapshot(state: &AppState) -> Result<()> {
         .bind(
             json!({
                 "sourceText": sentence.get::<String, _>(1),
+                "createdAt": sentence.get::<String, _>(2),
+                "createdOrder": local_id,
                 "targetLanguages": languages,
                 "topics": topics,
                 "preparations": preparations
@@ -311,7 +313,7 @@ async fn sync_connected(db: &sqlx::SqlitePool) -> Result<bool> {
 }
 
 async fn sentence_payload(db: &sqlx::SqlitePool, sentence_id: i64) -> Result<serde_json::Value> {
-    let sentence = sqlx::query("SELECT source_text FROM sentences WHERE id=?")
+    let sentence = sqlx::query("SELECT source_text,created_at FROM sentences WHERE id=?")
         .bind(sentence_id)
         .fetch_optional(db)
         .await?
@@ -378,6 +380,8 @@ async fn sentence_payload(db: &sqlx::SqlitePool, sentence_id: i64) -> Result<ser
     }
     Ok(json!({
         "sourceText": sentence.get::<String, _>(0),
+        "createdAt": sentence.get::<String, _>(1),
+        "createdOrder": sentence_id,
         "targetLanguages": languages,
         "topics": topics,
         "preparations": preparations
@@ -551,7 +555,8 @@ pub async fn connect_sync_account(
     }
     sqlx::query(
         "UPDATE sync_state SET server_url=?,user_id=?,device_id=?,pull_cursor=0,
-         status='pending',last_error=NULL,initial_upload_completed=0 WHERE id=1",
+         status='pending',last_error=NULL,initial_upload_completed=0,
+         chronology_upload_enqueued=0 WHERE id=1",
     )
     .bind(&base_url)
     .bind(user_id.to_string())
@@ -672,8 +677,9 @@ async fn apply_sentence(
     let sentence: SentenceResponse = serde_json::from_value(payload)
         .map_err(|_| AppError::Sync("Invalid sentence received from server".into()))?;
     let local_id = sentence_local_id(tx, remote_id, &sentence).await?;
-    sqlx::query("UPDATE sentences SET source_text=? WHERE id=?")
+    sqlx::query("UPDATE sentences SET source_text=?,created_at=? WHERE id=?")
         .bind(&sentence.source_text)
+        .bind(&sentence.created_at)
         .bind(local_id)
         .execute(&mut **tx)
         .await?;
@@ -1266,6 +1272,23 @@ pub async fn sync_now(app: AppHandle, state: State<'_, AppState>) -> Result<Sync
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()?;
+    let (initial_upload_completed, chronology_upload_enqueued): (i64, i64) =
+        sqlx::query_as("SELECT initial_upload_completed,chronology_upload_enqueued FROM sync_state WHERE id=1")
+            .fetch_one(&state.db)
+            .await?;
+    if chronology_upload_enqueued == 0 {
+        if initial_upload_completed == 1 {
+            let sentence_ids = sqlx::query_scalar::<_, i64>("SELECT id FROM sentences ORDER BY id")
+                .fetch_all(&state.db)
+                .await?;
+            for sentence_id in sentence_ids {
+                enqueue_sentence_upsert(&state.db, sentence_id).await?;
+            }
+        }
+        sqlx::query("UPDATE sync_state SET chronology_upload_enqueued=1 WHERE id=1")
+            .execute(&state.db)
+            .await?;
+    }
     if let Err(error) =
         upload_provider_key(&client, &base_url, &token, "openai", secrets::get()?).await
     {

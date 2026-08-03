@@ -14,6 +14,7 @@ export function SentencesView() {
   const [text, setText] = useState("");
   const [translationComment, setTranslationComment] = useState("");
   const [targetLanguage, setTargetLanguage] = useState<string>(LANGUAGES[0]);
+  const [targetLanguageReady, setTargetLanguageReady] = useState(false);
   const [filterLanguage, setFilterLanguage] = useState<string>("");
   const [topic, setTopic] = useState("");
   const [filterTopic, setFilterTopic] = useState("");
@@ -27,6 +28,7 @@ export function SentencesView() {
     if (savedLanguage && LANGUAGES.some(language => language === savedLanguage)) {
       setTargetLanguage(savedLanguage);
     }
+    setTargetLanguageReady(true);
   }, []);
 
   const load = () => Promise.all([
@@ -34,7 +36,11 @@ export function SentencesView() {
     api.topics(),
   ]).then(([sentences, availableTopics]) => { setRows(sentences); setTopics(availableTopics); }).catch(reason => setError(String(reason)));
 
-  useEffect(() => { setSelected(new Set()); void load(); }, [filterLanguage, targetLanguage, filterTopic]);
+  useEffect(() => {
+    if (!targetLanguageReady) return;
+    setSelected(new Set());
+    void load();
+  }, [filterLanguage, targetLanguage, filterTopic, targetLanguageReady]);
   useEffect(() => {
     let off: undefined | (() => void);
     api.onProgress(progress => setRows(current => current.map(row => row.id === progress.sentenceId ? { ...row, status: progress.status, error: progress.error } : row))).then(value => off = value);
