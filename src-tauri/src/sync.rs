@@ -1037,7 +1037,7 @@ async fn sync_audio_uploads(
     let directory = audio_directory(app)?;
     let rows = sqlx::query(
         "SELECT sl.sentence_id,sl.target_language,sl.audio_file,sl.audio_name,sl.audio_mime,
-         ids.remote_id,a.remote_sha256
+         ids.remote_id
          FROM sentence_languages sl
          JOIN sync_entity_ids ids
            ON ids.entity_type='sentence' AND ids.local_key=CAST(sl.sentence_id AS TEXT)
@@ -1060,9 +1060,9 @@ async fn sync_audio_uploads(
         }
         let bytes = std::fs::read(directory.join(&stored_name))?;
         let hash = file_sha256(&bytes);
-        if row.get::<Option<String>, _>(6).as_deref() == Some(hash.as_str()) {
-            continue;
-        }
+        // The server may have been recreated while the desktop retained an
+        // old sync_audio_state record. Always upload the local file so a
+        // missing remote object is repaired automatically.
         let remote_id = Uuid::parse_str(&row.get::<String, _>(5))
             .map_err(|_| AppError::Sync("Sentence sync mapping is corrupted".into()))?;
         let mime = row
