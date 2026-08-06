@@ -1,13 +1,42 @@
 use crate::error::Result;
 use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 use std::{path::Path, str::FromStr};
+
+fn backup_before_cloud_migration(path: &Path) -> std::io::Result<Option<std::path::PathBuf>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let backup = path.with_file_name("langai-before-cloud-sync.sqlite3");
+    if backup.exists() {
+        return Ok(Some(backup));
+    }
+    std::fs::copy(path, &backup)?;
+    for suffix in ["-wal", "-shm"] {
+        let source = std::path::PathBuf::from(format!("{}{suffix}", path.display()));
+        if source.exists() {
+            std::fs::copy(
+                &source,
+                std::path::PathBuf::from(format!("{}{suffix}", backup.display())),
+            )?;
+        }
+    }
+    Ok(Some(backup))
+}
+
 pub async fn connect(path: &Path) -> Result<SqlitePool> {
+    let backup = backup_before_cloud_migration(path)?;
     let url = format!("sqlite:{}", path.display());
     let options = SqliteConnectOptions::from_str(&url)?
         .create_if_missing(true)
         .foreign_keys(true);
     let pool = SqlitePool::connect_with(options).await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
+    if let Some(backup) = backup {
+        sqlx::query("UPDATE sync_import_state SET backup_path=COALESCE(backup_path,?) WHERE id=1")
+            .bind(backup.to_string_lossy().as_ref())
+            .execute(&pool)
+            .await?;
+    }
     Ok(pool)
 }
 #[cfg(test)]
@@ -51,5 +80,11 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(language_count.0, 2);
+        let sync_state: (String, i64) =
+            sqlx::query_as("SELECT status,pull_cursor FROM sync_state WHERE id=1")
+                .fetch_one(&p)
+                .await
+                .unwrap();
+        assert_eq!(sync_state, ("disconnected".into(), 0));
     }
 }

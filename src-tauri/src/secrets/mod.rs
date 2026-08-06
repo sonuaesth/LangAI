@@ -2,6 +2,7 @@ use crate::error::{AppError, Result};
 const SERVICE: &str = "LangAI";
 const USER: &str = "openai-api-key";
 const ELEVENLABS_USER: &str = "elevenlabs-api-key";
+const SYNC_TOKEN_USER: &str = "sync-device-token";
 fn entry(user: &str) -> Result<keyring::Entry> {
     keyring::Entry::new(SERVICE, user).map_err(|e| AppError::Secret(e.to_string()))
 }
@@ -43,4 +44,13 @@ pub fn get_elevenlabs() -> Result<Option<String>> {
 }
 pub fn delete_elevenlabs() -> Result<()> {
     delete_for(ELEVENLABS_USER)
+}
+pub fn set_sync_token(value: &str) -> Result<()> {
+    set_for(SYNC_TOKEN_USER, value)
+}
+pub fn get_sync_token() -> Result<Option<String>> {
+    get_for(SYNC_TOKEN_USER)
+}
+pub fn delete_sync_token() -> Result<()> {
+    delete_for(SYNC_TOKEN_USER)
 }

@@ -1,6 +1,8 @@
 use serde::Serialize;
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
+    #[error("File system: {0}")]
+    Io(#[from] std::io::Error),
     #[error("Database: {0}")]
     Db(#[from] sqlx::Error),
     #[error("Migration: {0}")]
@@ -13,6 +15,8 @@ pub enum AppError {
     OpenAi(String),
     #[error("ElevenLabs: {0}")]
     ElevenLabs(String),
+    #[error("Synchronization: {0}")]
+    Sync(String),
     #[error("Invalid response: {0}")]
     Validation(String),
     #[error("{0}")]

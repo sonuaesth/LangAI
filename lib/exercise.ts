@@ -9,8 +9,10 @@ export function wrongAnswerPositions(answers: Record<number, string>, expected: 
 }
 
 export function availableBlockPositions(total: number, used: number[], limit = 2): number[] {
-  return Array.from({ length: total }, (_, position) => position)
-    .filter(position => !used.includes(position))
+  const positions = Array.from({ length: total }, (_, position) => position);
+  return [0, 1]
+    .map(column => positions.find(position => position % 2 === column && !used.includes(position)))
+    .filter((position): position is number => position !== undefined)
     .slice(0, limit);
 }
 

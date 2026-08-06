@@ -295,6 +295,15 @@ pub async fn generate_sentence_audio(
     app: AppHandle,
     s: State<'_, AppState>,
 ) -> Result<()> {
+    generate_sentence_audio_inner(sentence_id, &target_language, &app, &s).await
+}
+
+async fn generate_sentence_audio_inner(
+    sentence_id: i64,
+    target_language: &str,
+    app: &AppHandle,
+    s: &AppState,
+) -> Result<()> {
     let key = secrets::get_elevenlabs()?
         .ok_or_else(|| AppError::Input("Configure an ElevenLabs API key first".into()))?;
     let settings = settings_inner(&s).await?;
@@ -305,7 +314,7 @@ pub async fn generate_sentence_audio(
         .elevenlabs_voice_name
         .unwrap_or_else(|| "ElevenLabs".into());
     let row = sqlx::query("SELECT p.translation,sl.audio_file FROM sentence_languages sl JOIN preparations p ON p.id=sl.active_preparation_id WHERE sl.sentence_id=? AND sl.target_language=? AND sl.status='ready'")
-        .bind(sentence_id).bind(&target_language).fetch_optional(&s.db).await?
+        .bind(sentence_id).bind(target_language).fetch_optional(&s.db).await?
         .ok_or_else(|| AppError::Input("Prepare this translation before generating audio".into()))?;
     let text: String = row.get(0);
     let previous: Option<String> = row.get(1);
@@ -400,6 +409,7 @@ pub async fn add_sentences(
         return Err(AppError::Input("Translation comment is too long".into()));
     }
     validate_topic(&topic)?;
+    let mut changed_ids = std::collections::HashSet::new();
     for text in texts
         .into_iter()
         .map(|x| x.trim().to_owned())
@@ -429,6 +439,10 @@ pub async fn add_sentences(
         .execute(&s.db)
         .await?;
         assign_topic(&s.db, id, topic.as_deref()).await?;
+        changed_ids.insert(id);
+    }
+    for id in changed_ids {
+        crate::sync::enqueue_sentence_upsert(&s.db, id).await?;
     }
     list_sentences(None, Some(target_language), None, s).await
 }
@@ -459,6 +473,7 @@ async fn assign_topic(db: &sqlx::SqlitePool, sentence_id: i64, topic: Option<&st
 #[tauri::command]
 pub async fn delete_sentences(ids: Vec<i64>, s: State<'_, AppState>) -> Result<()> {
     for id in ids {
+        crate::sync::enqueue_sentence_delete(&s.db, id).await?;
         sqlx::query("DELETE FROM sentences WHERE id=?")
             .bind(id)
             .execute(&s.db)
@@ -492,6 +507,7 @@ pub async fn save_settings(model: String, s: State<'_, AppState>) -> Result<Sett
         .bind(model)
         .execute(&s.db)
         .await?;
+    crate::sync::enqueue_settings(&s.db).await?;
     settings_inner(&s).await
 }
 #[tauri::command]
@@ -535,6 +551,7 @@ pub async fn delete_elevenlabs_key(s: State<'_, AppState>) -> Result<Settings> {
     )
     .execute(&s.db)
     .await?;
+    crate::sync::enqueue_settings(&s.db).await?;
     settings_inner(&s).await
 }
 
@@ -559,6 +576,7 @@ pub async fn save_elevenlabs_voice(
         .bind(voice_name)
         .execute(&s.db)
         .await?;
+    crate::sync::enqueue_settings(&s.db).await?;
     settings_inner(&s).await
 }
 async fn persist(
@@ -605,6 +623,7 @@ async fn persist(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    crate::sync::enqueue_sentence_upsert(&state.db, id).await?;
     Ok(())
 }
 #[tauri::command]
@@ -628,6 +647,7 @@ pub async fn prepare_sentences(
     }
     validate_topic(&topic)?;
     let cfg = settings_inner(&s).await?;
+    let auto_generate_audio = cfg.elevenlabs_key_configured && cfg.elevenlabs_voice_id.is_some();
     let has_selected_ids = ids.is_some();
     let rows: Vec<(i64, String, String, Option<String>)> = if let Some(ids) = ids {
         let mut out = vec![];
@@ -677,6 +697,7 @@ pub async fn prepare_sentences(
             let app = app.clone();
             let key = key.clone();
             let model = cfg.model.clone();
+            let auto_generate_audio = auto_generate_audio;
             async move {
                 sqlx::query("UPDATE sentence_languages SET status='generating' WHERE sentence_id=? AND target_language=?")
                     .bind(id)
@@ -696,7 +717,10 @@ pub async fn prepare_sentences(
                 )
                 .ok();
                 let result = match openai::generate(&key, &model, &lang, &text, comment.as_deref()).await {
-                    Ok(g) => persist(&state, id, &g, &model, &lang).await,
+                    Ok(g) => match persist(&state, id, &g, &model, &lang).await {
+                        Ok(()) if auto_generate_audio => generate_sentence_audio_inner(id, &lang, &app, &state).await,
+                        result => result,
+                    },
                     Err(e) => Err(e),
                 };
                 match result {
@@ -797,10 +821,11 @@ pub async fn next_exercise(
     last_id: Option<i64>,
     target_language: Option<String>,
     topic: Option<String>,
+    shuffle: Option<bool>,
     s: State<'_, AppState>,
 ) -> Result<Option<Exercise>> {
     let rows = sqlx::query(
-        "SELECT sl.sentence_id FROM sentence_languages sl WHERE sl.status='ready' AND sl.active_preparation_id IS NOT NULL AND (? IS NULL OR sl.target_language=?) AND (? IS NULL OR EXISTS(SELECT 1 FROM sentence_topics st JOIN topics t ON t.id=st.topic_id WHERE st.sentence_id=sl.sentence_id AND t.name=? COLLATE NOCASE))",
+        "SELECT sl.sentence_id FROM sentence_languages sl JOIN sentences s ON s.id=sl.sentence_id WHERE sl.status='ready' AND sl.active_preparation_id IS NOT NULL AND (? IS NULL OR sl.target_language=?) AND (? IS NULL OR EXISTS(SELECT 1 FROM sentence_topics st JOIN topics t ON t.id=st.topic_id WHERE st.sentence_id=sl.sentence_id AND t.name=? COLLATE NOCASE)) ORDER BY s.created_at DESC,s.id DESC",
     )
     .bind(&target_language)
     .bind(&target_language)
@@ -808,7 +833,12 @@ pub async fn next_exercise(
     .bind(&topic)
     .fetch_all(&s.db)
     .await?;
-    let ids = crate::exercise::next_cycle(rows.iter().map(|r| r.get(0)).collect(), last_id);
+    let ordered_ids = rows.iter().map(|r| r.get(0)).collect();
+    let ids = if shuffle.unwrap_or(false) {
+        crate::exercise::next_cycle(ordered_ids, last_id)
+    } else {
+        crate::exercise::next_chronological(ordered_ids, last_id)
+    };
     let Some(id) = ids.first() else {
         return Ok(None);
     };

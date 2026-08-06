@@ -6,6 +6,16 @@ pub fn next_cycle(mut ids: Vec<i64>, last: Option<i64>) -> Vec<i64> {
     }
     ids
 }
+
+pub fn next_chronological(ids: Vec<i64>, last: Option<i64>) -> Vec<i64> {
+    let Some(last) = last else { return ids };
+    let Some(position) = ids.iter().position(|id| *id == last) else { return ids };
+    ids[position + 1..]
+        .iter()
+        .chain(ids[..=position].iter())
+        .copied()
+        .collect()
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -17,5 +27,13 @@ mod tests {
         let mut s = v.clone();
         s.sort();
         assert_eq!(s, vec![1, 2, 3])
+    }
+
+
+    #[test]
+    fn chronological_cycle_advances_and_wraps() {
+        assert_eq!(next_chronological(vec![3, 2, 1], None), vec![3, 2, 1]);
+        assert_eq!(next_chronological(vec![3, 2, 1], Some(3)), vec![2, 1, 3]);
+        assert_eq!(next_chronological(vec![3, 2, 1], Some(1)), vec![3, 2, 1]);
     }
 }

@@ -2160,10 +2160,12 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "keyring",
+ "langai-contracts",
  "rand",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tauri",
  "tauri-build",
@@ -2171,7 +2173,17 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "unicode-normalization",
+ "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "langai-contracts"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
